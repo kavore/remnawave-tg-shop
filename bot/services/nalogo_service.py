@@ -61,10 +61,12 @@ class NalogoService:
             return None
 
         try:
+            # API expects quantity as integer when it's a whole number
+            qty = int(quantity) if float(quantity).is_integer() else Decimal(str(quantity))
             service_item = IncomeServiceItem(
                 name=item_name,
                 amount=Decimal(str(amount)),
-                quantity=Decimal(str(quantity)),
+                quantity=qty,
             )
             total_amount = service_item.get_total_amount()
             request = IncomeRequest(

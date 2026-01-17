@@ -54,6 +54,14 @@ class Settings(BaseSettings):
         default=None,
         description="Password for nalog.ru (self-employed) authentication"
     )
+    NALOGO_RECEIPT_NAME_SUBSCRIPTION: str = Field(
+        default="subscription {months} months",
+        description="Receipt item name for time-based subscriptions. Use {months} placeholder for duration."
+    )
+    NALOGO_RECEIPT_NAME_TRAFFIC: str = Field(
+        default="traffic package {gb} GB",
+        description="Receipt item name for traffic packages. Use {gb} placeholder for traffic amount."
+    )
 
     WEBHOOK_BASE_URL: Optional[str] = None
 

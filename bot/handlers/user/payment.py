@@ -282,9 +282,9 @@ async def process_successful_payment(session: AsyncSession, bot: Bot,
             receipt_item_name = payment_info_from_webhook.get("description")
             if not receipt_item_name:
                 if sale_mode == "traffic":
-                    receipt_item_name = f"Remnawave traffic package {traffic_label} GB"
+                    receipt_item_name = settings.NALOGO_RECEIPT_NAME_TRAFFIC.format(gb=traffic_label)
                 else:
-                    receipt_item_name = f"Remnawave subscription {int(subscription_months)} months"
+                    receipt_item_name = settings.NALOGO_RECEIPT_NAME_SUBSCRIPTION.format(months=int(subscription_months))
             try:
                 await nalogo_service.create_income_receipt(
                     item_name=receipt_item_name,
