@@ -78,22 +78,22 @@ async def _initiate_yk_payment(
     if not callback.message:
         return False
 
-    # NEW: Check for active discount and apply if exists
-    original_price = price_rub
+    # Check for active discount to save metadata (price already discounted from previous step)
+    original_price = None
     discount_amount = None
     active_promo_code_id = None
 
     if promo_code_service:
         active_discount = await active_discount_dal.get_active_discount(session, user_id)
         if active_discount:
-            final_price, discount_amount = promo_code_service.calculate_discounted_price(
-                price_rub, active_discount.discount_percentage
-            )
-            price_rub = final_price
+            # Price is already discounted, calculate original price backwards
+            discount_pct = active_discount.discount_percentage
+            original_price = price_rub / (1 - discount_pct / 100)
+            discount_amount = original_price - price_rub
             active_promo_code_id = active_discount.promo_code_id
             logging.info(
-                f"Applying {active_discount.discount_percentage}% discount to YooKassa payment: "
-                f"{original_price} -> {price_rub}"
+                f"Recording {discount_pct}% discount for YooKassa payment: "
+                f"original {original_price:.2f} -> final {price_rub}"
             )
 
     payment_description = (
