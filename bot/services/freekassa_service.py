@@ -78,10 +78,46 @@ class FreeKassaService:
         ip_address: Optional[str] = None,
         payment_method_id: Optional[int] = None,
         extra_params: Optional[Dict[str, Any]] = None,
+        promo_code_service=None,
+        session=None,
     ) -> Tuple[bool, Dict[str, Any]]:
         if not self.configured:
             logging.error("FreeKassaService is not configured. Cannot create order.")
             return False, {"message": "service_not_configured"}
+
+        # Check for active discount to save metadata (price already discounted from previous step)
+        original_amount = None
+        discount_amount = None
+        promo_code_id = None
+
+        if promo_code_service and session:
+            from db.dal import active_discount_dal
+            active_discount = await active_discount_dal.get_active_discount(session, user_id)
+            if active_discount:
+                # Price is already discounted, calculate original price backwards
+                discount_pct = active_discount.discount_percentage
+                original_amount = amount / (1 - discount_pct / 100)
+                discount_amount = original_amount - amount
+                promo_code_id = active_discount.promo_code_id
+                logging.info(
+                    f"Recording {discount_pct}% discount for FreeKassa payment: "
+                    f"original {original_amount:.2f} -> final {amount}"
+                )
+
+                # Update payment record with discount metadata
+                try:
+                    await payment_dal.update_payment_discount_info(
+                        session,
+                        payment_db_id,
+                        original_amount,
+                        discount_amount,
+                        promo_code_id,
+                    )
+                    await session.commit()
+                except Exception as e_update:
+                    logging.warning(
+                        f"FreeKassa: failed to update discount metadata for payment {payment_db_id}: {e_update}"
+                    )
 
         ip_address = ip_address or self.server_ip
         if not ip_address:
