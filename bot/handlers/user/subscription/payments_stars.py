@@ -19,6 +19,7 @@ async def pay_stars_callback_handler(
     i18n_data: dict,
     session: AsyncSession,
     stars_service: StarsService,
+    promo_code_service=None,
 ):
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
     i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
@@ -66,6 +67,7 @@ async def pay_stars_callback_handler(
         stars_price=stars_price,
         description=payment_description,
         sale_mode=sale_mode,
+        promo_code_service=promo_code_service,
     )
 
     if payment_db_id:

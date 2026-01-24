@@ -45,7 +45,7 @@
 
 1.  **Клонируйте репозиторий:**
     ```bash
-    git clone https://github.com/machka-pasla/remnawave-tg-shop
+    git clone https://github.com/kavore/remnawave-tg-shop
     cd remnawave-tg-shop
     ```
 
@@ -176,6 +176,152 @@
     ```
 
     > 💡 Если включена проверка подписки на канал (`REQUIRED_CHANNEL_ID`), добавьте бота администратором в этот канал. Пользователь увидит кнопку «Проверить подписку», и, после первого успешного подтверждения, дальнейшие действия блокироваться не будут.
+
+## Подробная инструкция для развертывания на сервере с панелью Remnawave
+
+### 1. Клонирование репозитория
+
+```bash
+git clone https://github.com/kavore/remnawave-tg-shop && cd remnawave-tg-shop
+```
+
+### 2. Настройка переменных окружения
+
+```bash
+cp .env.example .env && nano .env
+```
+
+**Обязательные поля для заполнения:**
+- `BOT_TOKEN` - токен телеграмм бота, например, `234567890:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`
+- `ADMIN_IDS` - TG ID администраторов, например, `12345678,98765432` и т.д. (через запятую без пробелов)
+- `WEBHOOK_BASE_URL` - Обязательно. Базовый URL для вебхуков, например `https://webhook.domain.com`
+- `PANEL_API_URL` - URL API вашей панели Remnawave (например, `http://remnawave:3000/api` или `https://panel.domain.com/api`)
+- `PANEL_API_KEY` - API ключ для доступа к панели (генерируется из UI-интерфейса панели)
+- `PANEL_WEBHOOK_SECRET` - Секретный ключ для проверки вебхуков от панели (берётся из `.env` самой панели)
+- `USER_SQUAD_UUIDS` - ID отрядов для новых пользователей
+
+### 3. Настройка Reverse Proxy (Nginx)
+
+Перейдите в директорию конфигурации Nginx панели Remnawave:
+
+```bash
+cd /opt/remnawave/nginx && nano nginx.conf
+```
+
+Добавьте в `nginx.conf` следующую конфигурацию:
+
+```nginx
+upstream remnawave-tg-shop {
+    server remnawave-tg-shop:8080;
+}
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    "" close;
+}
+
+server {
+    server_name webhook.domain.com; # Домен для отправки Webhook'ов
+    listen 443 ssl;
+    http2 on;
+
+    ssl_certificate "/etc/nginx/ssl/webhook_fullchain.pem";
+    ssl_certificate_key "/etc/nginx/ssl/webhook_privkey.key";
+    ssl_trusted_certificate "/etc/nginx/ssl/webhook_fullchain.pem";
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Port $server_port;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
+    proxy_intercept_errors on;
+    error_page 400 404 500 502 @redirect;
+
+    location / {
+        proxy_pass http://remnawave-tg-shop$request_uri;
+    }
+
+    location @redirect {
+        return 404;
+    }
+}
+```
+
+### 4. Выпуск SSL-сертификата для домена webhook
+
+Убедитесь, что установлены необходимые компоненты, а также откройте 80 порт:
+
+```bash
+sudo apt-get install cron socat
+curl https://get.acme.sh | sh -s email=EMAIL && source ~/.bashrc
+ufw allow 80/tcp && ufw reload
+```
+
+Выпустите сертификат:
+
+```bash
+acme.sh --set-default-ca --server letsencrypt
+acme.sh --issue --standalone -d 'webhook.domain.com' \
+  --key-file /opt/remnawave/nginx/webhook_privkey.key \
+  --fullchain-file /opt/remnawave/nginx/webhook_fullchain.pem
+```
+
+### 5. Добавление сертификатов в Docker Compose Nginx
+
+Отредактируйте `docker-compose.yml` панели Nginx:
+
+```bash
+cd /opt/remnawave/nginx && nano docker-compose.yml
+```
+
+Добавьте две строки в секцию `volumes`:
+
+```yaml
+services:
+    remnawave-nginx:
+        image: nginx:1.26
+        container_name: remnawave-nginx
+        hostname: remnawave-nginx
+        volumes:
+            - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+            - ./fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
+            - ./privkey.key:/etc/nginx/ssl/privkey.key:ro
+            - ./subdomain_fullchain.pem:/etc/nginx/ssl/subdomain_fullchain.pem:ro
+            - ./subdomain_privkey.key:/etc/nginx/ssl/subdomain_privkey.key:ro
+            - ./webhook_fullchain.pem:/etc/nginx/ssl/webhook_fullchain.pem:ro     # Добавьте эту строку
+            - ./webhook_privkey.key:/etc/nginx/ssl/webhook_privkey.key:ro         # Добавьте эту строку
+        restart: always
+        ports:
+            - '0.0.0.0:443:443'
+        networks:
+            - remnawave-network
+
+networks:
+    remnawave-network:
+        name: remnawave-network
+        driver: bridge
+        external: true
+```
+
+### 6. Запуск бота и перезапуск Nginx
+
+Запустите бота:
+
+```bash
+cd /root/remnawave-tg-shop && docker compose up -d && docker compose logs -f -t
+```
+
+Перезапустите Nginx:
+
+```bash
+cd /opt/remnawave/nginx && docker compose down && docker compose up -d && docker compose logs -f -t
+```
 
 ## 🐳 Docker
 

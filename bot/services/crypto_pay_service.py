@@ -65,10 +65,30 @@ class CryptoPayService:
         amount: float,
         description: str,
         sale_mode: str = "subscription",
+        promo_code_service=None,
     ) -> Optional[str]:
         if not self.configured or not self.client:
             logging.error("CryptoPayService not configured")
             return None
+
+        # Check for active discount to save metadata (price already discounted from previous step)
+        original_amount = None
+        discount_amount = None
+        promo_code_id = None
+
+        if promo_code_service:
+            from db.dal import active_discount_dal
+            active_discount = await active_discount_dal.get_active_discount(session, user_id)
+            if active_discount:
+                # Price is already discounted, calculate original price backwards
+                discount_pct = active_discount.discount_percentage
+                original_amount = amount / (1 - discount_pct / 100)
+                discount_amount = original_amount - amount
+                promo_code_id = active_discount.promo_code_id
+                logging.info(
+                    f"Recording {discount_pct}% discount for CryptoPay payment: "
+                    f"original {original_amount:.2f} -> final {amount}"
+                )
 
         # Create pending payment in DB and commit to persist
         try:
@@ -76,12 +96,15 @@ class CryptoPayService:
                 session,
                 {
                     "user_id": user_id,
-                    "amount": float(amount),
+                    "amount": amount,
+                    "original_amount": original_amount,
+                    "discount_applied": discount_amount,
                     "currency": self.settings.CRYPTOPAY_ASSET,
                     "status": "pending_cryptopay",
                     "description": description,
                     "subscription_duration_months": int(months),
                     "provider": "cryptopay",
+                    "promo_code_id": promo_code_id,
                 },
             )
             await session.commit()
@@ -153,6 +176,12 @@ class CryptoPayService:
 
         async with async_session_factory() as session:
             try:
+                # Fetch payment record to get promo_code_id
+                payment_record = await payment_dal.get_payment_by_db_id(session, payment_db_id)
+                if not payment_record:
+                    logging.error(f"CryptoPay: Payment record {payment_db_id} not found")
+                    return
+
                 await payment_dal.update_provider_payment_and_status(
                     session,
                     payment_db_id,
@@ -165,6 +194,7 @@ class CryptoPayService:
                     int(months) if sale_mode != "traffic" else 0,
                     float(invoice.amount),
                     payment_db_id,
+                    promo_code_id_from_payment=payment_record.promo_code_id,
                     provider="cryptopay",
                     sale_mode=sale_mode,
                     traffic_gb=traffic_gb if sale_mode == "traffic" else None,

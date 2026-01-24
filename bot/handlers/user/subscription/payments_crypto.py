@@ -18,6 +18,7 @@ async def pay_crypto_callback_handler(
     i18n_data: dict,
     session: AsyncSession,
     cryptopay_service: CryptoPayService,
+    promo_code_service=None,
 ):
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
     i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
@@ -65,6 +66,7 @@ async def pay_crypto_callback_handler(
         amount=price_amount,
         description=payment_description,
         sale_mode=sale_mode,
+        promo_code_service=promo_code_service,
     )
 
     if invoice_url:

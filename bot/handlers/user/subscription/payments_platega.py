@@ -21,6 +21,7 @@ async def pay_platega_callback_handler(
     i18n_data: dict,
     platega_service: PlategaService,
     session: AsyncSession,
+    promo_code_service=None,
 ):
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
     i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
@@ -68,14 +69,19 @@ async def pay_platega_callback_handler(
     )
     currency_code = settings.DEFAULT_CURRENCY_SYMBOL or "RUB"
 
+    # Price is already discounted at payments_subscription.py stage
+    # Service will handle discount metadata if needed
     payment_record_payload = {
         "user_id": user_id,
         "amount": price_rub,
+        "original_amount": None,
+        "discount_applied": None,
         "currency": currency_code,
         "status": "pending_platega",
         "description": payment_description,
         "subscription_duration_months": int(months),
         "provider": "platega",
+        "promo_code_id": None,
     }
 
     try:
@@ -114,6 +120,8 @@ async def pay_platega_callback_handler(
         currency=currency_code,
         description=payment_description,
         payload=payload_meta,
+        promo_code_service=promo_code_service,
+        session=session,
     )
 
     if success:

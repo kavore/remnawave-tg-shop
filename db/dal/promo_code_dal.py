@@ -43,6 +43,34 @@ async def get_active_promo_code_by_code_str(
     return result.scalar_one_or_none()
 
 
+async def get_active_bonus_promo_code_by_code_str(
+        session: AsyncSession, code_str: str) -> Optional[PromoCode]:
+    """Get active bonus_days-type promo code by code string"""
+    stmt = select(PromoCode).where(
+        PromoCode.code == code_str.upper(),
+        PromoCode.promo_type == "bonus_days",
+        PromoCode.is_active == True,
+        PromoCode.current_activations < PromoCode.max_activations,
+        or_(PromoCode.valid_until == None, PromoCode.valid_until
+            > datetime.now(timezone.utc)))
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def get_active_discount_promo_code_by_code_str(
+        session: AsyncSession, code_str: str) -> Optional[PromoCode]:
+    """Get active discount-type promo code by code string"""
+    stmt = select(PromoCode).where(
+        PromoCode.code == code_str.upper(),
+        PromoCode.promo_type == "discount",
+        PromoCode.is_active == True,
+        PromoCode.current_activations < PromoCode.max_activations,
+        or_(PromoCode.valid_until == None, PromoCode.valid_until
+            > datetime.now(timezone.utc)))
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def get_all_active_promo_codes(session: AsyncSession,
                                      limit: int = 20,
                                      offset: int = 0) -> List[PromoCode]:
