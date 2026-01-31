@@ -99,12 +99,48 @@ class SeverPayService:
         amount: float,
         currency: Optional[str],
         description: str,
+        promo_code_service=None,
+        session=None,
     ) -> Tuple[bool, Dict[str, Any]]:
         if not self.configured:
             logging.error("SeverPayService is not configured. Cannot create payment.")
             return False, {"message": "service_not_configured"}
 
-        session = await self._get_session()
+        # Check for active discount to save metadata (price already discounted from previous step)
+        original_amount = None
+        discount_amount = None
+        promo_code_id = None
+
+        if promo_code_service and session:
+            from db.dal import active_discount_dal
+            active_discount = await active_discount_dal.get_active_discount(session, user_id)
+            if active_discount:
+                # Price is already discounted, calculate original price backwards
+                discount_pct = active_discount.discount_percentage
+                original_amount = amount / (1 - discount_pct / 100)
+                discount_amount = original_amount - amount
+                promo_code_id = active_discount.promo_code_id
+                logging.info(
+                    f"Recording {discount_pct}% discount for SeverPay payment: "
+                    f"original {original_amount:.2f} -> final {amount}"
+                )
+
+                # Update payment record with discount metadata
+                try:
+                    await payment_dal.update_payment_discount_info(
+                        session,
+                        payment_db_id,
+                        original_amount,
+                        discount_amount,
+                        promo_code_id,
+                    )
+                    await session.commit()
+                except Exception as e_update:
+                    logging.warning(
+                        f"SeverPay: failed to update discount metadata for payment {payment_db_id}: {e_update}"
+                    )
+
+        http_session = await self._get_session()
         url = f"{self.base_url}/payin/create"
         currency_code = (currency or self.settings.DEFAULT_CURRENCY_SYMBOL or "RUB").upper()
         amount_str = self._format_amount(amount)
@@ -124,7 +160,7 @@ class SeverPayService:
         signed_body = self._build_signed_body(body)
 
         try:
-            async with session.post(url, json=signed_body) as response:
+            async with http_session.post(url, json=signed_body) as response:
                 response_text = await response.text()
                 try:
                     response_data = json.loads(response_text) if response_text else {}
@@ -207,6 +243,7 @@ class SeverPayService:
                         int(payment_months) if sale_mode != "traffic" else 0,
                         float(payment.amount),
                         payment.payment_id,
+                        promo_code_id_from_payment=payment.promo_code_id,
                         provider="severpay",
                         sale_mode=sale_mode,
                         traffic_gb=payment_months if sale_mode == "traffic" else None,

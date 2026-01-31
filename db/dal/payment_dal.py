@@ -176,6 +176,32 @@ async def update_provider_payment_and_status(
     return payment
 
 
+async def update_payment_discount_info(
+        session: AsyncSession,
+        payment_db_id: int,
+        original_amount: Optional[float],
+        discount_applied: Optional[float],
+        promo_code_id: Optional[int]) -> Optional[Payment]:
+    """Update payment record with discount metadata."""
+    payment = await get_payment_by_db_id(session, payment_db_id)
+    if payment:
+        payment.original_amount = original_amount
+        payment.discount_applied = discount_applied
+        payment.promo_code_id = promo_code_id
+        payment.updated_at = func.now()
+        await session.flush()
+        await session.refresh(payment)
+        logging.info(
+            f"Payment record {payment.payment_id} updated with discount info: "
+            f"original {original_amount}, discount {discount_applied}, promo {promo_code_id}"
+        )
+    else:
+        logging.warning(
+            f"Payment record with DB ID {payment_db_id} not found for discount info update."
+        )
+    return payment
+
+
 async def get_financial_statistics(session: AsyncSession) -> Dict[str, Any]:
     """Get comprehensive financial statistics."""
     from datetime import datetime, timedelta

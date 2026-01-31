@@ -43,6 +43,34 @@ async def get_active_promo_code_by_code_str(
     return result.scalar_one_or_none()
 
 
+async def get_active_bonus_promo_code_by_code_str(
+        session: AsyncSession, code_str: str) -> Optional[PromoCode]:
+    """Get active bonus_days-type promo code by code string"""
+    stmt = select(PromoCode).where(
+        PromoCode.code == code_str.upper(),
+        PromoCode.promo_type == "bonus_days",
+        PromoCode.is_active == True,
+        PromoCode.current_activations < PromoCode.max_activations,
+        or_(PromoCode.valid_until == None, PromoCode.valid_until
+            > datetime.now(timezone.utc)))
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def get_active_discount_promo_code_by_code_str(
+        session: AsyncSession, code_str: str) -> Optional[PromoCode]:
+    """Get active discount-type promo code by code string"""
+    stmt = select(PromoCode).where(
+        PromoCode.code == code_str.upper(),
+        PromoCode.promo_type == "discount",
+        PromoCode.is_active == True,
+        PromoCode.current_activations < PromoCode.max_activations,
+        or_(PromoCode.valid_until == None, PromoCode.valid_until
+            > datetime.now(timezone.utc)))
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def get_all_active_promo_codes(session: AsyncSession,
                                      limit: int = 20,
                                      offset: int = 0) -> List[PromoCode]:
@@ -104,16 +132,29 @@ async def update_promo_code(session: AsyncSession, promo_id: int,
 
 
 async def delete_promo_code(session: AsyncSession, promo_id: int) -> Optional[PromoCode]:
+    from db.dal import active_discount_dal
+
     promo = await get_promo_code_by_id(session, promo_id)
     if not promo:
         return None
-    # First, delete related activations due to foreign key constraint
+
+    # 1. Clear all active discounts referencing this promo code
+    await active_discount_dal.clear_active_discounts_by_promo_code(session, promo_id)
+
+    # 2. Set promo_code_id to NULL in payments table to avoid FK violation
+    stmt = update(Payment).where(Payment.promo_code_id == promo_id).values(promo_code_id=None)
+    await session.execute(stmt)
+
+    # 3. Delete related activations
     activations = await get_promo_activations_by_code_id(session, promo_id)
     for activation in activations:
         await session.delete(activation)
-    
+
+    # 4. Delete the promo code itself
     await session.delete(promo)
     await session.flush()
+
+    logging.info(f"Promo code '{promo.code}' (ID: {promo_id}) deleted successfully")
     return promo
 
 

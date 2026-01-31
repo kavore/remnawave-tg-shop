@@ -17,6 +17,7 @@ async def select_subscription_period_callback_handler(
     settings: Settings,
     i18n_data: dict,
     session: AsyncSession,
+    promo_code_service=None,  # Injected from dispatcher
 ):
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
     i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
@@ -48,6 +49,29 @@ async def select_subscription_period_callback_handler(
     price_rub = price_source.get(months)
     stars_price = stars_price_source.get(months)
     currency_symbol_val = settings.DEFAULT_CURRENCY_SYMBOL
+
+    # Check for active discount and apply if exists
+    discount_text = ""
+    if promo_code_service and price_rub:
+        active_discount_info = await promo_code_service.get_user_active_discount(
+            session, callback.from_user.id
+        )
+
+        if active_discount_info:
+            discount_pct, promo_code = active_discount_info
+            original_price_rub = price_rub
+            price_rub, discount_amt = promo_code_service.calculate_discounted_price(
+                price_rub, discount_pct
+            )
+            discount_text = get_text(
+                "active_discount_notice",
+                code=promo_code,
+                discount_pct=discount_pct,
+                original_price=original_price_rub,
+                discounted_price=price_rub,
+                discount_amount=discount_amt
+            )
+            # Note: Stars prices typically don't get discounts (can be added if needed)
 
     if price_rub is None:
         if traffic_mode and not price_source and stars_price is not None:
@@ -83,6 +107,9 @@ async def select_subscription_period_callback_handler(
             return
 
     text_content = get_text("choose_payment_method_traffic") if traffic_mode else get_text("choose_payment_method")
+    if discount_text:
+        text_content = f"{discount_text}\n\n{text_content}"
+
     reply_markup = get_payment_method_keyboard(
         months,
         price_rub,

@@ -20,6 +20,7 @@ async def pay_severpay_callback_handler(
     i18n_data: dict,
     severpay_service: SeverPayService,
     session: AsyncSession,
+    promo_code_service=None,
 ):
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
     i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
@@ -67,14 +68,19 @@ async def pay_severpay_callback_handler(
     )
     currency_code = settings.DEFAULT_CURRENCY_SYMBOL or "RUB"
 
+    # Price is already discounted at payments_subscription.py stage
+    # Service will handle discount metadata if needed
     payment_record_payload = {
         "user_id": user_id,
         "amount": price_rub,
+        "original_amount": None,
+        "discount_applied": None,
         "currency": currency_code,
         "status": "pending_severpay",
         "description": payment_description,
         "subscription_duration_months": int(months),
         "provider": "severpay",
+        "promo_code_id": None,
     }
 
     try:
@@ -103,6 +109,8 @@ async def pay_severpay_callback_handler(
         amount=price_rub,
         currency=currency_code,
         description=payment_description,
+        promo_code_service=promo_code_service,
+        session=session,
     )
 
     if success:

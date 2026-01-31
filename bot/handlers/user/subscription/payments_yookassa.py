@@ -13,7 +13,7 @@ from bot.keyboards.inline.user_keyboards import (
 from bot.middlewares.i18n import JsonI18n
 from bot.services.yookassa_service import YooKassaService
 from config.settings import Settings
-from db.dal import payment_dal, user_billing_dal
+from db.dal import payment_dal, user_billing_dal, active_discount_dal
 
 router = Router(name="user_subscription_payments_yookassa_router")
 
@@ -60,6 +60,7 @@ async def _initiate_yk_payment(
     settings: Settings,
     session: AsyncSession,
     yookassa_service: YooKassaService,
+    promo_code_service,  # NEW: Added promo_code_service
     i18n: Optional[JsonI18n],
     current_lang: str,
     get_text,
@@ -77,6 +78,24 @@ async def _initiate_yk_payment(
     if not callback.message:
         return False
 
+    # Check for active discount to save metadata (price already discounted from previous step)
+    original_price = None
+    discount_amount = None
+    active_promo_code_id = None
+
+    if promo_code_service:
+        active_discount = await active_discount_dal.get_active_discount(session, user_id)
+        if active_discount:
+            # Price is already discounted, calculate original price backwards
+            discount_pct = active_discount.discount_percentage
+            original_price = price_rub / (1 - discount_pct / 100)
+            discount_amount = original_price - price_rub
+            active_promo_code_id = active_discount.promo_code_id
+            logging.info(
+                f"Recording {discount_pct}% discount for YooKassa payment: "
+                f"original {original_price:.2f} -> final {price_rub}"
+            )
+
     payment_description = (
         get_text("payment_description_traffic", traffic_gb=_format_value(months))
         if sale_mode == "traffic"
@@ -84,11 +103,14 @@ async def _initiate_yk_payment(
     )
     payment_record_data = {
         "user_id": user_id,
-        "amount": price_rub,
+        "amount": price_rub,  # Discounted amount
+        "original_amount": original_price if discount_amount else None,  # NEW
+        "discount_applied": discount_amount,  # NEW
         "currency": currency_code_for_yk,
         "status": "pending_yookassa",
         "description": payment_description,
         "subscription_duration_months": int(months),
+        "promo_code_id": active_promo_code_id,  # NEW: Link to promo code
     }
 
     db_payment_record = None
@@ -319,7 +341,7 @@ async def _initiate_yk_payment(
 
 
 @router.callback_query(F.data.startswith("pay_yk:"))
-async def pay_yk_callback_handler(callback: types.CallbackQuery, settings: Settings, i18n_data: dict, yookassa_service: YooKassaService, session: AsyncSession):
+async def pay_yk_callback_handler(callback: types.CallbackQuery, settings: Settings, i18n_data: dict, yookassa_service: YooKassaService, session: AsyncSession, promo_code_service=None):
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
     i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
     get_text = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
@@ -417,6 +439,7 @@ async def pay_yk_callback_handler(callback: types.CallbackQuery, settings: Setti
         settings=settings,
         session=session,
         yookassa_service=yookassa_service,
+        promo_code_service=promo_code_service,
         i18n=i18n,
         current_lang=current_lang,
         get_text=get_text,
@@ -435,7 +458,7 @@ async def pay_yk_callback_handler(callback: types.CallbackQuery, settings: Setti
 
 
 @router.callback_query(F.data.startswith("pay_yk_new:"))
-async def pay_yk_new_card_handler(callback: types.CallbackQuery, settings: Settings, i18n_data: dict, yookassa_service: YooKassaService, session: AsyncSession):
+async def pay_yk_new_card_handler(callback: types.CallbackQuery, settings: Settings, i18n_data: dict, yookassa_service: YooKassaService, session: AsyncSession, promo_code_service=None):
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
     i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
     get_text = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
@@ -491,6 +514,7 @@ async def pay_yk_new_card_handler(callback: types.CallbackQuery, settings: Setti
         settings=settings,
         session=session,
         yookassa_service=yookassa_service,
+        promo_code_service=promo_code_service,
         i18n=i18n,
         current_lang=current_lang,
         get_text=get_text,
@@ -653,7 +677,7 @@ async def pay_yk_saved_list_handler(callback: types.CallbackQuery, settings: Set
 
 
 @router.callback_query(F.data.startswith("pay_yk_use_saved:"))
-async def pay_yk_use_saved_handler(callback: types.CallbackQuery, settings: Settings, i18n_data: dict, yookassa_service: YooKassaService, session: AsyncSession):
+async def pay_yk_use_saved_handler(callback: types.CallbackQuery, settings: Settings, i18n_data: dict, yookassa_service: YooKassaService, session: AsyncSession, promo_code_service=None):
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
     i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
     get_text = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
@@ -752,6 +776,7 @@ async def pay_yk_use_saved_handler(callback: types.CallbackQuery, settings: Sett
         settings=settings,
         session=session,
         yookassa_service=yookassa_service,
+        promo_code_service=promo_code_service,
         i18n=i18n,
         current_lang=current_lang,
         get_text=get_text,

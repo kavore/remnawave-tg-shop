@@ -123,13 +123,15 @@ async def process_promo_code_input(message: types.Message, state: FSMContext,
                                   code=hcode(code_input.upper()))
         reply_markup = get_back_to_main_menu_markup(current_lang, i18n)
     else:
-
+        # Try as BONUS code first (existing behavior)
         success, result = await promo_code_service.apply_promo_code(
             session, user.id, code_input, current_lang)
+
         if success:
+            # Bonus code success
             await session.commit()
             logging.info(
-                f"Promo code '{code_input}' successfully applied for user {user.id}."
+                f"Bonus promo code '{code_input}' successfully applied for user {user.id}."
             )
 
             new_end_date = result if isinstance(result, datetime) else None
@@ -151,14 +153,49 @@ async def process_promo_code_input(message: types.Message, state: FSMContext,
                 connect_button_url=connect_button_url,
             )
         else:
-            await session.rollback()
-            logging.info(
-                f"Promo code '{code_input}' application failed for user {user.id}. Reason: {result}"
+            # Bonus code failed, try as DISCOUNT code
+            success_discount, result_discount = await promo_code_service.apply_discount_promo_code(
+                session, user.id, code_input, current_lang
             )
-            response_to_user_text = result
-            reply_markup = get_back_to_main_menu_markup(
-                current_lang, i18n
-            )
+
+            if success_discount:
+                # Discount code success
+                await session.commit()
+                logging.info(
+                    f"Discount promo code '{code_input}' successfully applied for user {user.id}."
+                )
+                discount_pct = result_discount  # Returns percentage
+
+                # Send notification about discount promo activation
+                if settings.LOG_PROMO_ACTIVATIONS:
+                    try:
+                        from bot.services.notification_service import NotificationService
+                        notification_service = NotificationService(bot, settings, i18n)
+                        await notification_service.notify_discount_promo_activation(
+                            user_id=user.id,
+                            promo_code=code_input.upper(),
+                            discount_percentage=discount_pct,
+                            username=user.username
+                        )
+                    except Exception as e:
+                        logging.error(f"Failed to send discount promo activation notification: {e}")
+
+                response_to_user_text = _(
+                    "discount_promo_code_applied_success",
+                    code=hcode(code_input.upper()),
+                    discount=discount_pct
+                )
+                reply_markup = get_back_to_main_menu_markup(current_lang, i18n)
+            else:
+                # Both failed
+                await session.rollback()
+                logging.info(
+                    f"Promo code '{code_input}' application failed for user {user.id}. Reason: {result}"
+                )
+                response_to_user_text = result  # Original error message from bonus code attempt
+                reply_markup = get_back_to_main_menu_markup(
+                    current_lang, i18n
+                )
 
     await message.answer(
         response_to_user_text,

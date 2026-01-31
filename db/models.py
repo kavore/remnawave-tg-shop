@@ -100,7 +100,12 @@ class Payment(Base):
     provider_payment_id = Column(String, unique=True, nullable=True)
     provider = Column(String, nullable=False, default="yookassa", index=True)
     idempotence_key = Column(String, unique=True, nullable=True)
-    amount = Column(Float, nullable=False)
+    amount = Column(Float, nullable=False)  # Final amount paid (after discount if any)
+
+    # Discount tracking fields
+    original_amount = Column(Float, nullable=True)  # Amount before discount
+    discount_applied = Column(Float, nullable=True)  # Discount amount (not percentage)
+
     currency = Column(String, nullable=False)
     status = Column(String, nullable=False, index=True)
     description = Column(String, nullable=True)
@@ -154,7 +159,17 @@ class PromoCode(Base):
 
     promo_code_id = Column(Integer, primary_key=True, autoincrement=True)
     code = Column(String, unique=True, nullable=False, index=True)
-    bonus_days = Column(Integer, nullable=False)
+
+    # Type field to distinguish promo code types
+    promo_type = Column(String, nullable=False, default="bonus_days", index=True)
+    # Values: "bonus_days" or "discount"
+
+    # For bonus_days type: number of days to add to subscription
+    bonus_days = Column(Integer, nullable=True)
+
+    # For discount type: percentage discount (1-100)
+    discount_percentage = Column(Integer, nullable=True)
+
     max_activations = Column(Integer, nullable=False)
     current_activations = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
@@ -189,6 +204,19 @@ class PromoCodeActivation(Base):
     __table_args__ = (UniqueConstraint('promo_code_id',
                                        'user_id',
                                        name='uq_promo_user_activation'), )
+
+
+class ActiveDiscount(Base):
+    """Tracks pending discount promo codes awaiting payment (permanent until used)"""
+    __tablename__ = "active_discounts"
+
+    user_id = Column(BigInteger, ForeignKey("users.user_id"), primary_key=True)
+    promo_code_id = Column(Integer, ForeignKey("promo_codes.promo_code_id"), nullable=False)
+    discount_percentage = Column(Integer, nullable=False)
+    activated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    promo_code = relationship("PromoCode")
+    user = relationship("User")
 
 
 class MessageLog(Base):
