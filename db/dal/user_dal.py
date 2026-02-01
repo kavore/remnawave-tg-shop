@@ -324,6 +324,39 @@ async def get_user_ids_without_active_subscription(session: AsyncSession) -> Lis
     return result.scalars().all()
 
 
+async def get_user_ids_with_trial_no_connection(session: AsyncSession) -> List[int]:
+    """Return non-banned user IDs who had a trial but never used any traffic."""
+    # Users who ever had a trial subscription
+    trial_users_subq = (
+        select(Subscription.user_id)
+        .where(Subscription.provider.is_(None))
+        .distinct()
+        .subquery()
+    )
+
+    # Users who ever used traffic (any subscription)
+    connected_users_subq = (
+        select(Subscription.user_id)
+        .where(Subscription.traffic_used_bytes.is_not(None))
+        .where(Subscription.traffic_used_bytes > 0)
+        .distinct()
+        .subquery()
+    )
+
+    stmt = (
+        select(User.user_id)
+        .where(
+            and_(
+                User.is_banned == False,
+                User.user_id.in_(select(trial_users_subq.c.user_id)),
+                ~User.user_id.in_(select(connected_users_subq.c.user_id)),
+            )
+        )
+    )
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
 async def delete_user_and_relations(session: AsyncSession, user_id: int) -> bool:
     """Completely remove a user and all dependent records from the database.
 

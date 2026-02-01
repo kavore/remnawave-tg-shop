@@ -159,6 +159,7 @@
   "broadcast_target_all_button": "👥 All",
   "broadcast_target_active_button": "✅ Active",
   "broadcast_target_inactive_button": "⌛ Inactive",
+  "broadcast_target_trial_no_connect_button": "🧪 Trial, no connect",
   "confirm_broadcast_send_button": "✅ Send",
   "cancel_broadcast_button": "❌ Cancel",
   "admin_broadcast_sending_started": "Starting broadcast...",

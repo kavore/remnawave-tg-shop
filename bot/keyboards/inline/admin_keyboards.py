@@ -415,7 +415,7 @@ def get_broadcast_confirmation_keyboard(lang: str,
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
     builder = InlineKeyboardBuilder()
 
-    # Row: target selection (all / active / inactive)
+    # Row: target selection (all / active / inactive / trial-no-connect)
     target_all_label = _(
         key="broadcast_target_all_button"
     )
@@ -424,6 +424,9 @@ def get_broadcast_confirmation_keyboard(lang: str,
     )
     target_inactive_label = _(
         key="broadcast_target_inactive_button"
+    )
+    target_trial_no_connect_label = _(
+        key="broadcast_target_trial_no_connect_button"
     )
 
     # Highlight current selection with a prefix
@@ -442,7 +445,11 @@ def get_broadcast_confirmation_keyboard(lang: str,
         text=mark_selected(target_inactive_label, target == "inactive"),
         callback_data="broadcast_target:inactive",
     )
-    builder.adjust(3)
+    builder.button(
+        text=mark_selected(target_trial_no_connect_label, target == "trial_no_connect"),
+        callback_data="broadcast_target:trial_no_connect",
+    )
+    builder.adjust(2)
 
     # Row: confirmation
     builder.button(text=_(key="confirm_broadcast_send_button"),
