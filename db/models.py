@@ -25,6 +25,7 @@ class User(Base):
     referred_by_id = Column(BigInteger,
                             ForeignKey("users.user_id"),
                             nullable=True)
+    referral_balance = Column(Float, default=0)
     channel_subscription_verified = Column(Boolean, nullable=True)
     channel_subscription_checked_at = Column(DateTime(timezone=True),
                                              nullable=True)
@@ -121,6 +122,22 @@ class Payment(Base):
     user = relationship("User", back_populates="payments")
     promo_code_used = relationship("PromoCode",
                                    back_populates="payments_where_used")
+
+
+class ReferralWithdrawRequest(Base):
+    __tablename__ = "referral_withdraw_requests"
+
+    request_id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    contact = Column(Text, nullable=False)
+    status = Column(String, nullable=False, default="pending", index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+    processed_by_admin_id = Column(BigInteger, nullable=True)
+    admin_comment = Column(Text, nullable=True)
+
+    user = relationship("User")
 
 
 class UserBilling(Base):

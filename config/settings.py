@@ -168,6 +168,14 @@ class Settings(BaseSettings):
         default=True,
         description="When true, referral bonuses (for inviter and referee) are applied only once per invited user - on their first successful payment."
     )
+    REFERRAL_CASH_BONUS_PERCENT: float = Field(
+        default=0.0,
+        description="Cash bonus percent credited to inviter balance from successful referred payments."
+    )
+    REFERRAL_WITHDRAW_MIN_RUB: float = Field(
+        default=1000.0,
+        description="Minimum referral balance amount to request withdrawal (RUB)."
+    )
     LEGACY_REFS: bool = Field(
         default=True,
         description="Allow legacy referral links like ref_<telegram_id> to continue working. Defaults to True when unset."

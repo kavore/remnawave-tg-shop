@@ -255,6 +255,8 @@ class SeverPayService:
                             session,
                             payment.user_id,
                             int(payment_months),
+                            payment_amount=float(payment.amount),
+                            payment_provider="severpay",
                             current_payment_db_id=payment.payment_id,
                             skip_if_active_before_payment=False,
                         )

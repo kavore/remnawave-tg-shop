@@ -290,14 +290,27 @@ def get_yk_saved_cards_keyboard(
 
 
 def get_referral_link_keyboard(lang: str,
-                               i18n_instance) -> InlineKeyboardMarkup:
+                               i18n_instance,
+                               settings: Settings) -> InlineKeyboardMarkup:
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
     builder = InlineKeyboardBuilder()
     builder.button(text=_(key="referral_share_message_button"),
                    callback_data="referral_action:share_message")
+    if getattr(settings, "REFERRAL_CASH_BONUS_PERCENT", 0.0) and getattr(settings, "REFERRAL_WITHDRAW_MIN_RUB", 0.0):
+        builder.button(text=_(key="referral_withdraw_button"),
+                       callback_data="referral_action:withdraw")
     builder.button(text=_(key="back_to_main_menu_button"),
                    callback_data="main_action:back_to_main")
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_referral_withdraw_cancel_keyboard(lang: str,
+                                          i18n_instance) -> InlineKeyboardMarkup:
+    _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
+    builder = InlineKeyboardBuilder()
+    builder.button(text=_(key="cancel_button"),
+                   callback_data="referral_action:withdraw_cancel")
     return builder.as_markup()
 
 

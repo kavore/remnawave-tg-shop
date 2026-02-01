@@ -29,12 +29,15 @@ class ReferralService:
             session: AsyncSession,
             referee_user_id: int,
             purchased_subscription_months: int,
+            payment_amount: Optional[float] = None,
+            payment_provider: Optional[str] = None,
             current_payment_db_id: Optional[int] = None,
             skip_if_active_before_payment: bool = True) -> Dict[str, Any]:
 
         referee_final_end_date: Optional[datetime] = None
         referee_bonus_applied_days: Optional[int] = None
         inviter_bonus_successfully_applied = False
+        inviter_cash_bonus_applied = 0.0
 
         try:
             referee_user_model = await user_dal.get_user_by_id(
@@ -48,36 +51,31 @@ class ReferralService:
                     "referee_new_end_date": None
                 }
 
-            # If configured to apply referral bonuses only once per invited user,
-            # check if the referee already has succeeded payments.
-            # Use getattr with a safe default (True) to avoid AttributeError if
-            # running with an older settings schema.
-            if getattr(self.settings, "REFERRAL_ONE_BONUS_PER_REFEREE", True):
+            # Determine eligibility for referral bonuses based on settings.
+            eligible_for_bonus_days = True
+            one_bonus_per_referee = getattr(self.settings, "REFERRAL_ONE_BONUS_PER_REFEREE", True)
+            if one_bonus_per_referee:
                 try:
                     succeeded_count = await payment_dal.count_user_succeeded_payments(
                         session, referee_user_id, exclude_payment_id=current_payment_db_id
                     )
                     if succeeded_count and succeeded_count > 0:
+                        eligible_for_bonus_days = False
                         logging.info(
-                            f"Referral bonuses skipped for user {referee_user_id}: already has {succeeded_count} succeeded payments.")
-                        return {
-                            "referee_bonus_applied_days": None,
-                            "referee_new_end_date": None
-                        }
+                            f"Referral bonuses skipped for user {referee_user_id}: already has {succeeded_count} succeeded payments."
+                        )
                 except Exception as e_cnt:
                     logging.error(f"Failed counting succeeded payments for user {referee_user_id}: {e_cnt}")
 
             # Additionally, do not award referral bonuses if the user was active at payment time
             # (has an active subscription now). This avoids giving bonuses to already active users.
-            if skip_if_active_before_payment:
+            if eligible_for_bonus_days and skip_if_active_before_payment:
                 try:
                     if await self.subscription_service.has_active_subscription(session, referee_user_id):
+                        eligible_for_bonus_days = False
                         logging.info(
-                            f"Referral bonuses skipped for user {referee_user_id}: user currently has an active subscription.")
-                        return {
-                            "referee_bonus_applied_days": None,
-                            "referee_new_end_date": None
-                        }
+                            f"Referral bonuses skipped for user {referee_user_id}: user currently has an active subscription."
+                        )
                 except Exception as e_sub:
                     logging.error(f"Failed to check active subscription for {referee_user_id}: {e_sub}")
 
@@ -97,8 +95,11 @@ class ReferralService:
                 purchased_subscription_months)
             referee_bonus_days = self.settings.referral_bonus_referee.get(
                 purchased_subscription_months)
+            inviter_cash_percent = float(
+                getattr(self.settings, "REFERRAL_CASH_BONUS_PERCENT", 0.0) or 0.0
+            )
 
-            if inviter_bonus_days and inviter_bonus_days > 0:
+            if inviter_bonus_days and inviter_bonus_days > 0 and eligible_for_bonus_days:
                 if not inviter_user_model:
 
                     logging.warning(
@@ -223,7 +224,7 @@ class ReferralService:
                                         f"Failed to create new bonus subscription for inviter {inviter_user_id}: {e_create_bonus_sub}",
                                         exc_info=True)
 
-            if referee_bonus_days and referee_bonus_days > 0:
+            if referee_bonus_days and referee_bonus_days > 0 and eligible_for_bonus_days:
 
                 new_end_date_referee = await self.subscription_service.extend_active_subscription_days(
                     session=session,
@@ -244,11 +245,50 @@ class ReferralService:
                         f"Failed to apply referee bonus for {referee_user_id} (could not extend their new subscription)."
                     )
 
+            # Cash bonus rules:
+            # - if REFERRAL_ONE_BONUS_PER_REFEREE=True: only on first payment and only if no active subscription
+            # - if False: on every payment from a referred user
+            cash_bonus_allowed_providers = {"yookassa", "freekassa", "severpay", "platega"}
+            provider_allows_cash = (
+                payment_provider in cash_bonus_allowed_providers
+                if payment_provider
+                else False
+            )
+            if inviter_cash_percent > 0 and payment_amount and payment_amount > 0 and provider_allows_cash and (
+                not one_bonus_per_referee or eligible_for_bonus_days
+            ):
+                inviter_cash_bonus = round(
+                    float(payment_amount) * inviter_cash_percent / 100.0, 2
+                )
+                if inviter_user_model:
+                    try:
+                        await user_dal.adjust_referral_balance(
+                            session, inviter_user_id, inviter_cash_bonus
+                        )
+                        inviter_cash_bonus_applied = inviter_cash_bonus
+                        logging.info(
+                            "Cash referral bonus %.2f credited to inviter %s.",
+                            inviter_cash_bonus,
+                            inviter_user_id,
+                        )
+                    except Exception as e_cash:
+                        logging.error(
+                            "Failed to credit cash referral bonus to inviter %s: %s",
+                            inviter_user_id,
+                            e_cash,
+                        )
+                else:
+                    logging.warning(
+                        "Inviter user %s not found in local DB. Cannot credit cash bonus.",
+                        inviter_user_id,
+                    )
+
             return {
                 "referee_bonus_applied_days": referee_bonus_applied_days,
                 "referee_new_end_date": referee_final_end_date,
                 "inviter_bonus_applied_flag":
-                inviter_bonus_successfully_applied
+                inviter_bonus_successfully_applied,
+                "inviter_cash_bonus_applied": inviter_cash_bonus_applied,
             }
         except Exception as e:
             logging.error(

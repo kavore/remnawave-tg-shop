@@ -141,6 +141,10 @@ async def admin_panel_actions_callback_handler(
         from . import payments as admin_payments_handlers
         await admin_payments_handlers.view_payments_handler(
             callback, i18n_data, settings, session)
+    elif action == "withdraw_requests":
+        from . import referral_withdrawals as admin_withdrawals_handlers
+        await admin_withdrawals_handlers.view_withdraw_requests_handler(
+            callback, i18n_data, settings, session)
     elif action == "ads":
         from . import ads as admin_ads_handlers
         await admin_ads_handlers.show_ads_menu(callback, settings, i18n_data, session)

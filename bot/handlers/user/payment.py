@@ -260,6 +260,8 @@ async def process_successful_payment(session: AsyncSession, bot: Bot,
                 session,
                 user_id,
                 months_for_activation or int(subscription_months) or 1,
+                payment_amount=float(updated_payment_record.amount),
+                payment_provider="yookassa",
                 current_payment_db_id=payment_db_id,
                 skip_if_active_before_payment=False,
             )

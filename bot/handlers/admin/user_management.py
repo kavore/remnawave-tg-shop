@@ -295,6 +295,9 @@ async def format_user_card(user: User, session: AsyncSession,
             # Total revenue from referrals
             referral_revenue = await payment_dal.get_referral_revenue(session, user.user_id)
             card_parts.append(f"{_('admin_user_referral_revenue_label')} {hcode(f'{referral_revenue:.2f} RUB')}")
+
+            referral_balance = float(user.referral_balance or 0)
+            card_parts.append(f"{_('admin_user_referral_balance_label')} {hcode(f'{referral_balance:.2f} RUB')}")
         except Exception as e_fin:
             logging.error(f"Failed to build financial analytics for admin card {user.user_id}: {e_fin}")
 

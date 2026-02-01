@@ -6,6 +6,7 @@ from . import panel_sync_dal
 from . import message_log_dal
 from . import user_billing_dal
 from . import ad_dal
+from . import referral_withdrawal_dal
 
 __all__ = (
     "user_dal",
@@ -16,6 +17,6 @@ __all__ = (
     "message_log_dal",
     "user_billing_dal",
     "ad_dal",
+    "referral_withdrawal_dal",
 )
-
 

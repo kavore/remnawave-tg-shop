@@ -341,6 +341,8 @@ class FreeKassaService:
                         session,
                         payment.user_id,
                         int(months),
+                        payment_amount=float(payment.amount),
+                        payment_provider="freekassa",
                         current_payment_db_id=payment.payment_id,
                         skip_if_active_before_payment=False,
                     )

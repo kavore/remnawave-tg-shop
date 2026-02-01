@@ -155,6 +155,29 @@ async def update_user(
     return user
 
 
+async def get_referral_balance(session: AsyncSession, user_id: int) -> Optional[float]:
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return None
+    return float(user.referral_balance or 0)
+
+
+async def adjust_referral_balance(
+    session: AsyncSession, user_id: int, delta: float
+) -> Optional[float]:
+    stmt = (
+        update(User)
+        .where(User.user_id == user_id)
+        .values(referral_balance=func.coalesce(User.referral_balance, 0) + float(delta))
+        .returning(User.referral_balance)
+    )
+    result = await session.execute(stmt)
+    new_val = result.scalar_one_or_none()
+    if new_val is None:
+        return None
+    return float(new_val)
+
+
 async def update_user_language(
     session: AsyncSession, user_id: int, lang_code: str
 ) -> bool:

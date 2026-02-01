@@ -137,6 +137,8 @@ class StarsService:
                 session,
                 message.from_user.id,
                 int(months) or 1,
+                payment_amount=float(stars_amount),
+                payment_provider="telegram_stars",
                 current_payment_db_id=payment_db_id,
                 skip_if_active_before_payment=False,
             )

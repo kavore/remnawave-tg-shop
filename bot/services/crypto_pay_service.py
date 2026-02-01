@@ -205,6 +205,8 @@ class CryptoPayService:
                         session,
                         user_id,
                         int(months) or 1,
+                        payment_amount=float(invoice.amount),
+                        payment_provider="cryptopay",
                         current_payment_db_id=payment_db_id,
                         skip_if_active_before_payment=False,
                     )

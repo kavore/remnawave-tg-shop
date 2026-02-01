@@ -168,6 +168,51 @@ def _migration_0004_add_discount_promo_codes(connection: Connection) -> None:
         )
     )
 
+
+def _migration_0005_add_referral_balance_and_withdrawals(connection: Connection) -> None:
+    inspector = inspect(connection)
+    columns: Set[str] = {col["name"] for col in inspector.get_columns("users")}
+
+    if "referral_balance" not in columns:
+        connection.execute(
+            text(
+                "ALTER TABLE users ADD COLUMN referral_balance DOUBLE PRECISION DEFAULT 0"
+            )
+        )
+        connection.execute(
+            text("UPDATE users SET referral_balance = 0 WHERE referral_balance IS NULL")
+        )
+
+    tables = set(inspector.get_table_names())
+    if "referral_withdraw_requests" not in tables:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS referral_withdraw_requests (
+                    request_id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL REFERENCES users(user_id),
+                    amount DOUBLE PRECISION NOT NULL,
+                    contact TEXT NOT NULL,
+                    status VARCHAR(32) NOT NULL DEFAULT 'pending',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    processed_at TIMESTAMPTZ,
+                    processed_by_admin_id BIGINT,
+                    admin_comment TEXT
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_ref_withdraw_status ON referral_withdraw_requests (status)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_ref_withdraw_user_id ON referral_withdraw_requests (user_id)"
+            )
+        )
+
 MIGRATIONS: List[Migration] = [
     Migration(
         id="0001_add_channel_subscription_fields",
@@ -188,6 +233,11 @@ MIGRATIONS: List[Migration] = [
         id="0004_add_discount_promo_codes",
         description="Add support for percentage discount promo codes",
         upgrade=_migration_0004_add_discount_promo_codes,
+    ),
+    Migration(
+        id="0005_add_referral_balance_and_withdrawals",
+        description="Add referral balance to users and create withdrawal requests table",
+        upgrade=_migration_0005_add_referral_balance_and_withdrawals,
     ),
 ]
 
