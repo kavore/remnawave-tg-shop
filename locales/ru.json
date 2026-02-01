@@ -163,6 +163,7 @@
   "broadcast_target_trial_no_connect_button": "🧪 Триал, не подключались",
   "confirm_broadcast_send_button": "✅ Отправить",
   "cancel_broadcast_button": "❌ Отмена",
+  "admin_broadcast_refreshing_traffic": "Обновляю трафик перед рассылкой...",
   "admin_broadcast_sending_started": "Начинаю рассылку...",
   "admin_broadcast_error_no_message": "Ошибка: сообщение для рассылки не найдено.",
   "admin_broadcast_error_no_message_alert": "Сообщение для рассылки пустое!",

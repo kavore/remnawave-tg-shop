@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.settings import Settings
 
-from db.dal import user_dal, message_log_dal
+from db.dal import user_dal, message_log_dal, subscription_dal
 
 from bot.states.admin_states import AdminStates
 from bot.keyboards.inline.admin_keyboards import (
@@ -20,8 +20,97 @@ from bot.keyboards.inline.admin_keyboards import (
 from bot.middlewares.i18n import JsonI18n
 from bot.utils.message_queue import get_queue_manager
 from bot.utils import get_message_content, send_message_by_type, send_message_via_queue, MessageContent
+from bot.services.panel_api_service import PanelApiService
 
 router = Router(name="admin_broadcast_router")
+
+SAFE_TRAFFIC_SYNC_BATCH_SIZE = 200
+SAFE_TRAFFIC_SYNC_CONCURRENCY = 5
+SAFE_TRAFFIC_SYNC_PAUSE_SECONDS = 0.3
+
+
+def _chunk_list(items: list, chunk_size: int) -> list:
+    return [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+
+
+async def _fetch_panel_user(panel_service: PanelApiService, panel_uuid: str, sem: asyncio.Semaphore) -> Optional[dict]:
+    async with sem:
+        try:
+            return await panel_service.get_user_by_uuid(panel_uuid)
+        except Exception as exc:
+            logging.warning("Panel fetch failed for uuid %s: %s", panel_uuid, exc)
+            return None
+
+
+async def _refresh_trial_traffic_before_broadcast(
+    session: AsyncSession,
+    settings: Settings,
+    trial_users: list[tuple[int, str]],
+) -> tuple[int, int, int]:
+    if not trial_users:
+        return 0, 0, 0
+
+    total = len(trial_users)
+    updated = 0
+    failed = 0
+    sem = asyncio.Semaphore(SAFE_TRAFFIC_SYNC_CONCURRENCY)
+
+    async with PanelApiService(settings) as panel_service:
+        for batch in _chunk_list(trial_users, SAFE_TRAFFIC_SYNC_BATCH_SIZE):
+            tasks = [
+                _fetch_panel_user(panel_service, panel_uuid, sem)
+                for _, panel_uuid in batch
+            ]
+            results = await asyncio.gather(*tasks)
+
+            for (user_id, panel_uuid), panel_user_data in zip(batch, results):
+                if not panel_user_data or panel_user_data.get("error"):
+                    failed += 1
+                    continue
+
+                active_sub = await subscription_dal.get_active_subscription_by_user_id(
+                    session, user_id, panel_uuid
+                )
+                if not active_sub:
+                    active_sub = await subscription_dal.get_latest_subscription_by_user_id(
+                        session, user_id, panel_uuid
+                    )
+                if not active_sub:
+                    continue
+
+                traffic_stats = panel_user_data.get("userTraffic") or {}
+                panel_traffic_used = traffic_stats.get("usedTrafficBytes")
+                panel_traffic_limit = panel_user_data.get("trafficLimitBytes")
+
+                update_payload = {}
+                if (
+                    panel_traffic_used is not None
+                    and active_sub.traffic_used_bytes != panel_traffic_used
+                ):
+                    update_payload["traffic_used_bytes"] = panel_traffic_used
+                if (
+                    panel_traffic_limit is not None
+                    and active_sub.traffic_limit_bytes != panel_traffic_limit
+                ):
+                    update_payload["traffic_limit_bytes"] = panel_traffic_limit
+
+                if update_payload:
+                    await subscription_dal.update_subscription(
+                        session, active_sub.subscription_id, update_payload
+                    )
+                    updated += 1
+
+            try:
+                await session.commit()
+            except Exception as exc:
+                logging.error("Failed to commit traffic refresh batch: %s", exc)
+                await session.rollback()
+                failed += len(batch)
+
+            if SAFE_TRAFFIC_SYNC_PAUSE_SECONDS:
+                await asyncio.sleep(SAFE_TRAFFIC_SYNC_PAUSE_SECONDS)
+
+    return total, updated, failed
 
 
 async def broadcast_message_prompt_handler(
@@ -248,10 +337,34 @@ async def confirm_broadcast_callback_handler(
             )
             return
 
-        await callback.message.edit_text(_("admin_broadcast_sending_started"), reply_markup=None)
-        await callback.answer()
-
         target = user_fsm_data.get("broadcast_target", "all")
+        await callback.answer()
+        if target == "trial_no_connect":
+            try:
+                await callback.message.edit_text(
+                    _("admin_broadcast_refreshing_traffic"), reply_markup=None
+                )
+            except Exception:
+                pass
+
+            trial_users = await user_dal.get_trial_user_ids_with_panel_uuid(session)
+            total, updated, failed = await _refresh_trial_traffic_before_broadcast(
+                session, settings, trial_users
+            )
+            logging.info(
+                "Traffic refresh before trial_no_connect broadcast: total=%s updated=%s failed=%s",
+                total,
+                updated,
+                failed,
+            )
+
+        try:
+            await callback.message.edit_text(
+                _("admin_broadcast_sending_started"), reply_markup=None
+            )
+        except Exception:
+            pass
+
         if target == "active":
             user_ids = await user_dal.get_user_ids_with_active_subscription(session)
         elif target == "inactive":

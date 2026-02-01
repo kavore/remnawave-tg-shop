@@ -162,6 +162,7 @@
   "broadcast_target_trial_no_connect_button": "🧪 Trial, no connect",
   "confirm_broadcast_send_button": "✅ Send",
   "cancel_broadcast_button": "❌ Cancel",
+  "admin_broadcast_refreshing_traffic": "Refreshing traffic usage before broadcast...",
   "admin_broadcast_sending_started": "Starting broadcast...",
   "admin_broadcast_error_no_message": "Error: no message to broadcast.",
   "admin_broadcast_error_no_message_alert": "Broadcast message is empty!",

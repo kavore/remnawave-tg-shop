@@ -357,6 +357,24 @@ async def get_user_ids_with_trial_no_connection(session: AsyncSession) -> List[i
     return result.scalars().all()
 
 
+async def get_trial_user_ids_with_panel_uuid(session: AsyncSession) -> List[Tuple[int, str]]:
+    """Return (user_id, panel_user_uuid) for non-banned users who have trial subscriptions."""
+    stmt = (
+        select(User.user_id, User.panel_user_uuid)
+        .join(Subscription, Subscription.user_id == User.user_id)
+        .where(
+            and_(
+                User.is_banned == False,
+                User.panel_user_uuid.is_not(None),
+                Subscription.provider.is_(None),
+            )
+        )
+        .distinct()
+    )
+    result = await session.execute(stmt)
+    return [(row[0], row[1]) for row in result.all()]
+
+
 async def delete_user_and_relations(session: AsyncSession, user_id: int) -> bool:
     """Completely remove a user and all dependent records from the database.
 
