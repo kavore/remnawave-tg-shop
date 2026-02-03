@@ -210,8 +210,16 @@ class ActiveDiscount(Base):
     """Tracks pending discount promo codes awaiting payment (permanent until used)"""
     __tablename__ = "active_discounts"
 
-    user_id = Column(BigInteger, ForeignKey("users.user_id"), primary_key=True)
-    promo_code_id = Column(Integer, ForeignKey("promo_codes.promo_code_id"), nullable=False)
+    user_id = Column(
+        BigInteger,
+        ForeignKey("users.user_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    promo_code_id = Column(
+        Integer,
+        ForeignKey("promo_codes.promo_code_id", ondelete="CASCADE"),
+        nullable=False,
+    )
     discount_percentage = Column(Integer, nullable=False)
     activated_at = Column(DateTime(timezone=True), server_default=func.now())
 

@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import math
 from aiogram import Router, F, types, Bot
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
@@ -39,7 +40,13 @@ def _hwid_callback_token(hwid: Optional[str]) -> str:
     return hashlib.sha256(hwid_str.encode()).hexdigest()[:32]
 
 
-async def display_subscription_options(event: Union[types.Message, types.CallbackQuery], i18n_data: dict, settings: Settings, session: AsyncSession):
+async def display_subscription_options(
+    event: Union[types.Message, types.CallbackQuery],
+    i18n_data: dict,
+    settings: Settings,
+    session: AsyncSession,
+    promo_code_service=None,
+):
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
     i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
 
@@ -61,21 +68,46 @@ async def display_subscription_options(event: Union[types.Message, types.Callbac
     stars_traffic_packages = getattr(settings, "stars_traffic_packages", {}) or {}
     traffic_mode = bool(getattr(settings, "traffic_sale_mode", False) or stars_traffic_packages)
 
+    options_are_stars = False
     if traffic_mode:
         if traffic_packages:
             options = traffic_packages
         elif stars_traffic_packages:
             options = stars_traffic_packages
             currency_symbol_val = "⭐"
+            options_are_stars = True
         else:
             options = {}
     else:
         options = settings.subscription_options
 
-    if options:
+    display_options = options
+    if options and promo_code_service:
+        try:
+            active_discount_info = await promo_code_service.get_user_active_discount(
+                session, event.from_user.id
+            )
+        except Exception:
+            active_discount_info = None
+        if active_discount_info:
+            discount_pct, _promo_code = active_discount_info
+            discounted_options = {}
+            for period, price in options.items():
+                if price is None:
+                    discounted_options[period] = price
+                else:
+                    discounted_price, _ = promo_code_service.calculate_discounted_price(
+                        price, discount_pct
+                    )
+                    if options_are_stars:
+                        discounted_price = math.ceil(discounted_price)
+                    discounted_options[period] = discounted_price
+            display_options = discounted_options
+
+    if display_options:
         text_content = get_text("select_traffic_package") if traffic_mode else get_text("select_subscription_period")
         reply_markup = get_subscription_options_keyboard(
-            options, currency_symbol_val, current_lang, i18n, traffic_mode=traffic_mode
+            display_options, currency_symbol_val, current_lang, i18n, traffic_mode=traffic_mode
         )
     else:
         text_content = get_text("no_subscription_options_available")
@@ -104,8 +136,16 @@ async def display_subscription_options(event: Union[types.Message, types.Callbac
 
 
 @router.callback_query(F.data == "main_action:subscribe")
-async def reshow_subscription_options_callback(callback: types.CallbackQuery, i18n_data: dict, settings: Settings, session: AsyncSession):
-    await display_subscription_options(callback, i18n_data, settings, session)
+async def reshow_subscription_options_callback(
+    callback: types.CallbackQuery,
+    i18n_data: dict,
+    settings: Settings,
+    session: AsyncSession,
+    promo_code_service=None,
+):
+    await display_subscription_options(
+        callback, i18n_data, settings, session, promo_code_service=promo_code_service
+    )
 
 
 async def my_subscription_command_handler(

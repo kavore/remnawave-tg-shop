@@ -190,9 +190,19 @@ async def process_promo_code_input(message: types.Message, state: FSMContext,
                 # Both failed
                 await session.rollback()
                 logging.info(
-                    f"Promo code '{code_input}' application failed for user {user.id}. Reason: {result}"
+                    f"Promo code '{code_input}' application failed for user {user.id}. "
+                    f"Bonus reason: {result}. Discount reason: {result_discount}"
                 )
-                response_to_user_text = result  # Original error message from bonus code attempt
+                bonus_not_found_text = _(
+                    "promo_code_not_found", code=code_input.upper()
+                )
+                discount_not_found_text = _(
+                    "promo_code_not_found_or_not_discount", code=code_input.upper()
+                )
+                if result != bonus_not_found_text and result_discount == discount_not_found_text:
+                    response_to_user_text = result
+                else:
+                    response_to_user_text = result_discount  # Prefer the discount attempt error
                 reply_markup = get_back_to_main_menu_markup(
                     current_lang, i18n
                 )

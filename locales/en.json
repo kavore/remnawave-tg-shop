@@ -79,7 +79,7 @@
   "discount_promo_code_applied_success": "✅ Promo code <code>{code}</code> activated!\n\n💰 A {discount}% discount will be applied to your next purchase.\n\nSelect a plan for payment.",
   "discount_promo_already_active": "❌ You already have an active discount promo code (<code>{code}</code>, -{discount_pct}%). Use it first or wait until the payment is complete.",
   "promo_code_not_found_or_not_discount": "❌ Promo code <code>{code}</code> not found or is invalid.",
-  "active_discount_notice": "🎁 Active discount: <code>{code}</code> (-{discount_pct}%)\n💵 Price: <s>{original_price}</s> ➔ <b>{discounted_price}</b>\n💰 Savings: {discount_amount}",
+  "active_discount_notice": "🎁 Active discount: <code>{code}</code> (-{discount_pct}%)\n💵 Price: <s>{original_price}{currency_symbol}</s> ➔ <b>{discounted_price}{currency_symbol}</b>\n💰 Savings: {discount_amount}{currency_symbol}",
   "error_applying_promo_bonus": "Failed to apply promo bonus. Please try again later or contact support.",
   "promo_input_cancelled_short": "Promo code entry cancelled.",
   "trial_feature_disabled": "Free trial is currently unavailable.",

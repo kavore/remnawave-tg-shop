@@ -82,13 +82,35 @@ class CryptoPayService:
             if active_discount:
                 # Price is already discounted, calculate original price backwards
                 discount_pct = active_discount.discount_percentage
-                original_amount = amount / (1 - discount_pct / 100)
-                discount_amount = original_amount - amount
                 promo_code_id = active_discount.promo_code_id
-                logging.info(
-                    f"Recording {discount_pct}% discount for CryptoPay payment: "
-                    f"original {original_amount:.2f} -> final {amount}"
-                )
+                denominator = 1 - discount_pct / 100
+                if denominator <= 0:
+                    price_source = (
+                        getattr(self.settings, "traffic_packages", {}) or {}
+                        if sale_mode == "traffic"
+                        else (self.settings.subscription_options or {})
+                    )
+                    fallback_original = price_source.get(months)
+                    if fallback_original is not None:
+                        original_amount = fallback_original
+                        discount_amount = original_amount - amount
+                        logging.info(
+                            f"Recording {discount_pct}% discount for CryptoPay payment: "
+                            f"original {original_amount:.2f} -> final {amount}"
+                        )
+                    else:
+                        logging.warning(
+                            "CryptoPay discount %s%% has invalid denominator and no fallback price for months=%s.",
+                            discount_pct,
+                            months,
+                        )
+                else:
+                    original_amount = amount / denominator
+                    discount_amount = original_amount - amount
+                    logging.info(
+                        f"Recording {discount_pct}% discount for CryptoPay payment: "
+                        f"original {original_amount:.2f} -> final {amount}"
+                    )
 
         # Create pending payment in DB and commit to persist
         try:

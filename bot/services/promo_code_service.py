@@ -6,7 +6,7 @@ from aiogram import Bot
 
 from config.settings import Settings
 
-from db.dal import promo_code_dal, user_dal, active_discount_dal
+from db.dal import promo_code_dal, user_dal, active_discount_dal, payment_dal
 from db.models import PromoCode, User
 
 from .subscription_service import SubscriptionService
@@ -206,40 +206,88 @@ class PromoCodeService:
         payment_id: int
     ) -> bool:
         """
-        Consume active discount: record activation, increment usage, clear active discount.
+        Consume active discount: link activation to payment, increment usage, clear active discount.
         Call this AFTER successful payment.
         """
+        payment_record = await payment_dal.get_payment_by_db_id(session, payment_id)
+        if not payment_record:
+            logging.warning(
+                "Payment %s not found for discount consumption (user %s).",
+                payment_id,
+                user_id,
+            )
+            return False
+
+        if not payment_record.discount_applied:
+            return False
+
+        promo_code_id = payment_record.promo_code_id
+        if not promo_code_id:
+            logging.warning(
+                "Payment %s for user %s has discount_applied but no promo_code_id.",
+                payment_id,
+                user_id,
+            )
+            return False
+
         active_discount = await active_discount_dal.get_active_discount(session, user_id)
-        if not active_discount:
-            return False
-
-        # Record activation
-        activation_recorded = await promo_code_dal.record_promo_activation(
-            session,
-            active_discount.promo_code_id,
-            user_id,
-            payment_id=payment_id
-        )
-
-        # Increment usage
-        promo_incremented = await promo_code_dal.increment_promo_code_usage(
-            session,
-            active_discount.promo_code_id
-        )
-
-        # Clear active discount
-        await active_discount_dal.clear_active_discount(session, user_id)
-
-        if activation_recorded and promo_incremented:
-            await session.flush()
+        if active_discount and active_discount.promo_code_id != promo_code_id:
             logging.info(
-                f"Discount consumed for user {user_id}, promo {active_discount.promo_code_id}, "
-                f"payment {payment_id}"
+                "Active discount promo %s differs from payment promo %s; leaving active discount intact.",
+                active_discount.promo_code_id,
+                promo_code_id,
             )
-            return True
+            active_discount = None
+
+        existing_activation = await promo_code_dal.get_user_activation_for_promo(
+            session, promo_code_id, user_id
+        )
+        if existing_activation:
+            if existing_activation.payment_id is None:
+                updated_payment = await promo_code_dal.set_activation_payment_id(
+                    session, promo_code_id, user_id, payment_id
+                )
+                if updated_payment:
+                    logging.info(
+                        "Linked discount promo %s activation to payment %s for user %s.",
+                        promo_code_id,
+                        payment_id,
+                        user_id,
+                    )
         else:
-            logging.error(
-                f"Failed to consume discount for user {user_id}, "
-                f"promo {active_discount.promo_code_id}"
+            activation_recorded = await promo_code_dal.record_promo_activation(
+                session,
+                promo_code_id,
+                user_id,
+                payment_id=payment_id,
             )
-            return False
+            if not activation_recorded:
+                logging.error(
+                    "Failed to record discount activation for user %s, promo %s.",
+                    user_id,
+                    promo_code_id,
+                )
+                return False
+
+            promo_incremented = await promo_code_dal.increment_promo_code_usage(
+                session, promo_code_id, allow_overflow=True
+            )
+            if not promo_incremented:
+                logging.error(
+                    "Failed to increment discount usage for user %s, promo %s.",
+                    user_id,
+                    promo_code_id,
+                )
+                return False
+
+        if active_discount and active_discount.promo_code_id == promo_code_id:
+            await active_discount_dal.clear_active_discount(session, user_id)
+
+        await session.flush()
+        logging.info(
+            "Discount consumed for user %s, promo %s, payment %s",
+            user_id,
+            promo_code_id,
+            payment_id,
+        )
+        return True

@@ -1,4 +1,5 @@
 import logging
+import math
 from typing import Optional
 
 from aiogram import F, Router, types
@@ -52,26 +53,45 @@ async def select_subscription_period_callback_handler(
 
     # Check for active discount and apply if exists
     discount_text = ""
-    if promo_code_service and price_rub:
+    if promo_code_service and (price_rub is not None or stars_price is not None):
         active_discount_info = await promo_code_service.get_user_active_discount(
             session, callback.from_user.id
         )
 
         if active_discount_info:
             discount_pct, promo_code = active_discount_info
-            original_price_rub = price_rub
-            price_rub, discount_amt = promo_code_service.calculate_discounted_price(
-                price_rub, discount_pct
-            )
-            discount_text = get_text(
-                "active_discount_notice",
-                code=promo_code,
-                discount_pct=discount_pct,
-                original_price=original_price_rub,
-                discounted_price=price_rub,
-                discount_amount=discount_amt
-            )
-            # Note: Stars prices typically don't get discounts (can be added if needed)
+            if price_rub is not None:
+                original_price_rub = price_rub
+                price_rub, discount_amt = promo_code_service.calculate_discounted_price(
+                    price_rub, discount_pct
+                )
+                discount_text = get_text(
+                    "active_discount_notice",
+                    code=promo_code,
+                    discount_pct=discount_pct,
+                    original_price=original_price_rub,
+                    discounted_price=price_rub,
+                    discount_amount=discount_amt,
+                    currency_symbol=currency_symbol_val,
+                )
+            if stars_price is not None:
+                original_stars_price = stars_price
+                discounted_stars_price, _ = promo_code_service.calculate_discounted_price(
+                    float(stars_price), discount_pct
+                )
+                discounted_stars_price = math.ceil(discounted_stars_price)
+                stars_price = discounted_stars_price
+                if not discount_text:
+                    discount_amt = original_stars_price - discounted_stars_price
+                    discount_text = get_text(
+                        "active_discount_notice",
+                        code=promo_code,
+                        discount_pct=discount_pct,
+                        original_price=original_stars_price,
+                        discounted_price=discounted_stars_price,
+                        discount_amount=discount_amt,
+                        currency_symbol="⭐",
+                    )
 
     if price_rub is None:
         if traffic_mode and not price_source and stars_price is not None:

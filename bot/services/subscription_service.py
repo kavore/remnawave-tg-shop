@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any, List, Tuple
 from aiogram import Bot
 from bot.middlewares.i18n import JsonI18n
 
-from db.dal import user_dal, subscription_dal, promo_code_dal, payment_dal, user_billing_dal, active_discount_dal
+from db.dal import user_dal, subscription_dal, promo_code_dal, user_billing_dal
 from bot.utils.date_utils import add_months
 from bot.utils.config_link import prepare_config_links
 from db.models import User, Subscription
@@ -615,7 +615,7 @@ class SubscriptionService:
                 )
                 if activation:
                     await promo_code_dal.increment_promo_code_usage(
-                        session, promo_code_id_from_payment
+                        session, promo_code_id_from_payment, allow_overflow=True
                     )
                 else:
                     logging.warning(
@@ -691,33 +691,20 @@ class SubscriptionService:
         final_subscription_url = updated_panel_user.get("subscriptionUrl")
         final_panel_short_uuid = updated_panel_user.get("shortUuid", panel_short_uuid)
 
-        # NEW: Consume discount promo code if payment had one
+        # Consume discount promo code if payment had one
         try:
-            payment_record = await payment_dal.get_payment_by_db_id(session, payment_db_id)
-            if payment_record and payment_record.discount_applied:
-                # This payment had a discount applied - consume it
-                active_discount = await active_discount_dal.get_active_discount(session, user_id)
-                if active_discount:
-                    # Record promo activation
-                    await promo_code_dal.record_promo_activation(
-                        session,
-                        active_discount.promo_code_id,
-                        user_id,
-                        payment_id=payment_db_id
-                    )
-                    # Increment usage
-                    await promo_code_dal.increment_promo_code_usage(
-                        session,
-                        active_discount.promo_code_id
-                    )
-                    # Clear active discount
-                    await active_discount_dal.clear_active_discount(session, user_id)
-                    logging.info(
-                        f"Discount consumed for user {user_id}, promo {active_discount.promo_code_id}, "
-                        f"payment {payment_db_id}"
-                    )
+            promo_code_service = getattr(self, "promo_code_service", None)
+            if not promo_code_service:
+                from .promo_code_service import PromoCodeService
+
+                promo_code_service = PromoCodeService(
+                    self.settings, self, self.bot, self.i18n
+                )
+            await promo_code_service.consume_discount(session, user_id, payment_db_id)
         except Exception as e:
-            logging.error(f"Failed to consume discount for user {user_id}, payment {payment_db_id}: {e}")
+            logging.error(
+                f"Failed to consume discount for user {user_id}, payment {payment_db_id}: {e}"
+            )
             # Don't fail the subscription activation if discount consumption fails
 
         return {

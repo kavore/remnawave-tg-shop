@@ -159,20 +159,49 @@ async def delete_promo_code(session: AsyncSession, promo_id: int) -> Optional[Pr
 
 
 async def increment_promo_code_usage(
-        session: AsyncSession, promo_code_id: int) -> Optional[PromoCode]:
+        session: AsyncSession,
+        promo_code_id: int,
+        allow_overflow: bool = False) -> Optional[PromoCode]:
+    conditions = [PromoCode.promo_code_id == promo_code_id]
+    if not allow_overflow:
+        conditions.append(PromoCode.current_activations < PromoCode.max_activations)
+
+    stmt = (
+        update(PromoCode)
+        .where(*conditions)
+        .values(current_activations=PromoCode.current_activations + 1)
+    )
+    result = await session.execute(stmt)
+    if result.rowcount and result.rowcount > 0:
+        await session.flush()
+        return await get_promo_code_by_id(session, promo_code_id)
+
     promo = await get_promo_code_by_id(session, promo_code_id)
     if promo:
-        if promo.current_activations < promo.max_activations:
-            promo.current_activations += 1
-            await session.flush()
-            await session.refresh(promo)
-            return promo
+        if allow_overflow:
+            logging.warning(
+                f"Failed to increment promo usage for promo {promo.code} (ID: {promo_code_id})."
+            )
         else:
             logging.warning(
                 f"Promo code {promo.code} (ID: {promo_code_id}) already reached max activations."
             )
-            return None
     return None
+
+
+async def decrement_promo_code_usage(
+        session: AsyncSession, promo_code_id: int) -> bool:
+    stmt = (
+        update(PromoCode)
+        .where(
+            PromoCode.promo_code_id == promo_code_id,
+            PromoCode.current_activations > 0,
+        )
+        .values(current_activations=PromoCode.current_activations - 1)
+    )
+    result = await session.execute(stmt)
+    await session.flush()
+    return bool(result.rowcount and result.rowcount > 0)
 
 
 async def get_user_activation_for_promo(
@@ -230,3 +259,22 @@ async def record_promo_activation(
         f"Promo code {promo_code_id} activated by user {user_id}. Activation ID: {new_activation.activation_id}"
     )
     return new_activation
+
+
+async def set_activation_payment_id(
+        session: AsyncSession,
+        promo_code_id: int,
+        user_id: int,
+        payment_id: int) -> bool:
+    stmt = (
+        update(PromoCodeActivation)
+        .where(
+            PromoCodeActivation.promo_code_id == promo_code_id,
+            PromoCodeActivation.user_id == user_id,
+            PromoCodeActivation.payment_id == None,
+        )
+        .values(payment_id=payment_id)
+    )
+    result = await session.execute(stmt)
+    await session.flush()
+    return bool(result.rowcount and result.rowcount > 0)

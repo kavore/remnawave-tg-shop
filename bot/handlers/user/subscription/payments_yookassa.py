@@ -88,13 +88,35 @@ async def _initiate_yk_payment(
         if active_discount:
             # Price is already discounted, calculate original price backwards
             discount_pct = active_discount.discount_percentage
-            original_price = price_rub / (1 - discount_pct / 100)
-            discount_amount = original_price - price_rub
             active_promo_code_id = active_discount.promo_code_id
-            logging.info(
-                f"Recording {discount_pct}% discount for YooKassa payment: "
-                f"original {original_price:.2f} -> final {price_rub}"
-            )
+            denominator = 1 - discount_pct / 100
+            if denominator <= 0:
+                price_source = (
+                    getattr(settings, "traffic_packages", {}) or {}
+                    if sale_mode == "traffic"
+                    else (settings.subscription_options or {})
+                )
+                fallback_original = price_source.get(months)
+                if fallback_original is not None:
+                    original_price = fallback_original
+                    discount_amount = original_price - price_rub
+                    logging.info(
+                        f"Recording {discount_pct}% discount for YooKassa payment: "
+                        f"original {original_price:.2f} -> final {price_rub}"
+                    )
+                else:
+                    logging.warning(
+                        "YooKassa discount %s%% has invalid denominator and no fallback price for months=%s.",
+                        discount_pct,
+                        months,
+                    )
+            else:
+                original_price = price_rub / denominator
+                discount_amount = original_price - price_rub
+                logging.info(
+                    f"Recording {discount_pct}% discount for YooKassa payment: "
+                    f"original {original_price:.2f} -> final {price_rub}"
+                )
 
     payment_description = (
         get_text("payment_description_traffic", traffic_gb=_format_value(months))
