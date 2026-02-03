@@ -159,13 +159,16 @@ async def delete_promo_code(session: AsyncSession, promo_id: int) -> Optional[Pr
 
 
 async def increment_promo_code_usage(
-        session: AsyncSession, promo_code_id: int) -> Optional[PromoCode]:
+        session: AsyncSession,
+        promo_code_id: int,
+        allow_overflow: bool = False) -> Optional[PromoCode]:
+    conditions = [PromoCode.promo_code_id == promo_code_id]
+    if not allow_overflow:
+        conditions.append(PromoCode.current_activations < PromoCode.max_activations)
+
     stmt = (
         update(PromoCode)
-        .where(
-            PromoCode.promo_code_id == promo_code_id,
-            PromoCode.current_activations < PromoCode.max_activations,
-        )
+        .where(*conditions)
         .values(current_activations=PromoCode.current_activations + 1)
     )
     result = await session.execute(stmt)
@@ -175,9 +178,14 @@ async def increment_promo_code_usage(
 
     promo = await get_promo_code_by_id(session, promo_code_id)
     if promo:
-        logging.warning(
-            f"Promo code {promo.code} (ID: {promo_code_id}) already reached max activations."
-        )
+        if allow_overflow:
+            logging.warning(
+                f"Failed to increment promo usage for promo {promo.code} (ID: {promo_code_id})."
+            )
+        else:
+            logging.warning(
+                f"Promo code {promo.code} (ID: {promo_code_id}) already reached max activations."
+            )
     return None
 
 

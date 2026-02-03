@@ -140,36 +140,6 @@ class PromoCodeService:
             # This shouldn't happen since we checked above, but just in case
             return False, _("error_applying_promo_discount")
 
-        promo_incremented = await promo_code_dal.increment_promo_code_usage(
-            session, promo_data.promo_code_id
-        )
-        if not promo_incremented:
-            await active_discount_dal.clear_active_discount(session, user_id)
-            logging.info(
-                "Discount promo %s reached max activations during activation for user %s.",
-                promo_data.code,
-                user_id,
-            )
-            return False, _("promo_code_not_found_or_not_discount", code=code_input_upper)
-
-        activation_recorded = await promo_code_dal.record_promo_activation(
-            session,
-            promo_data.promo_code_id,
-            user_id,
-            payment_id=None,
-        )
-        if not activation_recorded:
-            await active_discount_dal.clear_active_discount(session, user_id)
-            await promo_code_dal.decrement_promo_code_usage(
-                session, promo_data.promo_code_id
-            )
-            logging.error(
-                "Failed to record discount activation for user %s, promo %s.",
-                user_id,
-                promo_data.promo_code_id,
-            )
-            return False, _("error_applying_promo_discount")
-
         logging.info(
             f"Discount promo code {code_input_upper} activated for user {user_id}: "
             f"{promo_data.discount_percentage}% off"
@@ -236,7 +206,7 @@ class PromoCodeService:
         payment_id: int
     ) -> bool:
         """
-        Consume active discount: record activation, increment usage, clear active discount.
+        Consume active discount: link activation to payment, increment usage, clear active discount.
         Call this AFTER successful payment.
         """
         payment_record = await payment_dal.get_payment_by_db_id(session, payment_id)
@@ -300,7 +270,7 @@ class PromoCodeService:
                 return False
 
             promo_incremented = await promo_code_dal.increment_promo_code_usage(
-                session, promo_code_id
+                session, promo_code_id, allow_overflow=True
             )
             if not promo_incremented:
                 logging.error(

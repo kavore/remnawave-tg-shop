@@ -615,7 +615,7 @@ class SubscriptionService:
                 )
                 if activation:
                     await promo_code_dal.increment_promo_code_usage(
-                        session, promo_code_id_from_payment
+                        session, promo_code_id_from_payment, allow_overflow=True
                     )
                 else:
                     logging.warning(
