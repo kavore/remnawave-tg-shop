@@ -168,6 +168,48 @@ def _migration_0004_add_discount_promo_codes(connection: Connection) -> None:
         )
     )
 
+
+def _migration_0005_fix_active_discounts_fk_cascade(connection: Connection) -> None:
+    inspector = inspect(connection)
+    if not inspector.has_table("active_discounts"):
+        return
+
+    connection.execute(
+        text(
+            "DELETE FROM active_discounts ad "
+            "WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.user_id = ad.user_id) "
+            "OR NOT EXISTS (SELECT 1 FROM promo_codes p WHERE p.promo_code_id = ad.promo_code_id)"
+        )
+    )
+
+    connection.execute(
+        text("ALTER TABLE active_discounts DROP CONSTRAINT IF EXISTS active_discounts_user_id_fkey")
+    )
+    connection.execute(
+        text("ALTER TABLE active_discounts DROP CONSTRAINT IF EXISTS fk_active_discounts_user")
+    )
+    connection.execute(
+        text("ALTER TABLE active_discounts DROP CONSTRAINT IF EXISTS active_discounts_promo_code_id_fkey")
+    )
+    connection.execute(
+        text("ALTER TABLE active_discounts DROP CONSTRAINT IF EXISTS fk_active_discounts_promo_code")
+    )
+
+    connection.execute(
+        text(
+            "ALTER TABLE active_discounts "
+            "ADD CONSTRAINT fk_active_discounts_user "
+            "FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE"
+        )
+    )
+    connection.execute(
+        text(
+            "ALTER TABLE active_discounts "
+            "ADD CONSTRAINT fk_active_discounts_promo_code "
+            "FOREIGN KEY (promo_code_id) REFERENCES promo_codes (promo_code_id) ON DELETE CASCADE"
+        )
+    )
+
 MIGRATIONS: List[Migration] = [
     Migration(
         id="0001_add_channel_subscription_fields",
@@ -188,6 +230,11 @@ MIGRATIONS: List[Migration] = [
         id="0004_add_discount_promo_codes",
         description="Add support for percentage discount promo codes",
         upgrade=_migration_0004_add_discount_promo_codes,
+    ),
+    Migration(
+        id="0005_fix_active_discounts_fk_cascade",
+        description="Ensure active_discounts FKs cascade on user/promo delete",
+        upgrade=_migration_0005_fix_active_discounts_fk_cascade,
     ),
 ]
 
