@@ -604,7 +604,7 @@ class SubscriptionService:
                 and promo_model.is_active
                 and promo_model.current_activations < promo_model.max_activations
             ):
-                applied_promo_bonus_days = promo_model.bonus_days
+                applied_promo_bonus_days = promo_model.bonus_days or 0
                 duration_days_total += applied_promo_bonus_days
 
                 activation = await promo_code_dal.record_promo_activation(
