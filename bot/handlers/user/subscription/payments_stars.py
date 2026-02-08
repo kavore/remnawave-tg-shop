@@ -78,12 +78,22 @@ async def pay_stars_callback_handler(
                     months=int(months),
                     traffic_gb=human_value,
                 ),
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text=get_text("back_to_payment_methods_button"),
-                        callback_data=f"subscribe_period:{human_value}",
-                    )]
-                ]),
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=get_text("back_to_payment_methods_button"),
+                                callback_data=f"subscribe_period:{human_value}",
+                            )
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                text=get_text("cancel_button"),
+                                callback_data="main_action:subscribe",
+                            )
+                        ],
+                    ]
+                ),
             )
         except Exception as e_edit:
             logging.warning(f"Stars payment: failed to show invoice info message ({e_edit})")
