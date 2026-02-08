@@ -165,7 +165,7 @@ class SeverPayService:
 
         http_session = await self._get_session()
         url = f"{self.base_url}/payin/create"
-        currency_code = (currency or self.settings.DEFAULT_CURRENCY_SYMBOL or "RUB").upper()
+        currency_code = (currency or "RUB").upper()
         amount_str = self._format_amount(amount)
 
         body = {

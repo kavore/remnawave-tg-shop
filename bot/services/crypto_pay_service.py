@@ -362,7 +362,7 @@ class CryptoPayService:
                 await notification_service.notify_payment_received(
                     user_id=user_id,
                     amount=float(invoice.amount),
-                    currency=invoice.asset or settings.DEFAULT_CURRENCY_SYMBOL,
+                    currency=invoice.asset or "RUB",
                     months=int(months) if sale_mode != "traffic" else 0,
                     traffic_gb=traffic_gb if sale_mode == "traffic" else None,
                     payment_provider="crypto_pay",

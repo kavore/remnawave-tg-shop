@@ -44,7 +44,7 @@ class FreeKassaService:
         self.shop_id: Optional[str] = settings.FREEKASSA_MERCHANT_ID
         self.api_key: Optional[str] = settings.FREEKASSA_API_KEY
         self.second_secret: Optional[str] = settings.FREEKASSA_SECOND_SECRET
-        self.default_currency: str = (settings.DEFAULT_CURRENCY_SYMBOL or "RUB").upper()
+        self.default_currency: str = "RUB"
         self.server_ip: Optional[str] = settings.FREEKASSA_PAYMENT_IP
         self.payment_method_id: Optional[int] = settings.FREEKASSA_PAYMENT_METHOD_ID
 

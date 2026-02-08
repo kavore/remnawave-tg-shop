@@ -142,7 +142,7 @@ class PlategaService:
 
         http_session = await self._get_session()
         url = f"{self.base_url}/transaction/process"
-        currency_code = (currency or self.settings.DEFAULT_CURRENCY_SYMBOL or "RUB").upper()
+        currency_code = (currency or "RUB").upper()
 
         body: Dict[str, Any] = {
             "paymentMethod": int(self.payment_method),
@@ -201,7 +201,7 @@ class PlategaService:
         transaction_id = str(data.get("id") or data.get("transactionId") or "").strip()
         status = str(data.get("status") or "").upper()
         amount_raw = data.get("amount")
-        currency = data.get("currency") or self.settings.DEFAULT_CURRENCY_SYMBOL or "RUB"
+        currency = data.get("currency") or "RUB"
 
         if not transaction_id or not status:
             logging.error("Platega webhook: missing transaction id or status in payload: %s", data)
