@@ -364,11 +364,15 @@ async def export_logs_csv_handler(callback: types.CallbackQuery,
             _("admin_csv_header_telegram_username"),
             _("admin_csv_header_telegram_first_name"),
             _("admin_csv_header_event_type"),
-            _("admin_csv_header_content"),
             _("admin_csv_header_is_admin_event"),
             _("admin_csv_header_target_user_id"),
-            _("admin_csv_header_raw_update_preview")
         ]
+        include_sensitive_fields = bool(settings.LOG_EXPORT_INCLUDE_SENSITIVE)
+        if include_sensitive_fields:
+            headers.extend([
+                _("admin_csv_header_content"),
+                _("admin_csv_header_raw_update_preview"),
+            ])
         csv_writer.writerow(headers)
         
         # Write data rows
@@ -387,11 +391,14 @@ async def export_logs_csv_handler(callback: types.CallbackQuery,
                 log.telegram_username or '',
                 log.telegram_first_name or '',
                 log.event_type or '',
-                content_clean,
                 'Yes' if log.is_admin_event else 'No',
                 log.target_user_id or '',
-                raw_update_clean
             ]
+            if include_sensitive_fields:
+                row.extend([
+                    content_clean,
+                    raw_update_clean,
+                ])
             csv_writer.writerow(row)
         
         # Create file

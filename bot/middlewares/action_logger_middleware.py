@@ -40,13 +40,14 @@ class ActionLoggerMiddleware(BaseMiddleware):
                 is_admin_event_flag = True
 
         raw_update_snippet = None
-        try:
-            raw_update_snippet = event.model_dump_json(exclude_none=True,
-                                                       indent=None)[:1000]
-        except AttributeError:
-            raw_update_snippet = str(event)[:1000]
-        except Exception:
-            raw_update_snippet = str(event)[:1000]
+        if self.settings.LOG_STORE_RAW_UPDATES:
+            try:
+                raw_update_snippet = event.model_dump_json(exclude_none=True,
+                                                           indent=None)[:1000]
+            except AttributeError:
+                raw_update_snippet = str(event)[:1000]
+            except Exception:
+                raw_update_snippet = str(event)[:1000]
 
         current_event_type = event.event_type
 
@@ -83,7 +84,7 @@ class ActionLoggerMiddleware(BaseMiddleware):
                 "telegram_username": telegram_username,
                 "telegram_first_name": telegram_first_name,
                 "event_type": current_event_type,
-                "content": content[:1000] if content else "N/A",
+                "content": (content[:1000] if content else "N/A") if self.settings.LOG_STORE_MESSAGE_CONTENT else None,
                 "raw_update_preview": raw_update_snippet,
                 "is_admin_event": is_admin_event_flag,
                 "target_user_id": target_user_id_for_log,
