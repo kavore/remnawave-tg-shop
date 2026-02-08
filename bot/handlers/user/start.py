@@ -564,7 +564,15 @@ async def verify_channel_subscription_callback(
         welcome_text = _(key="welcome",
                          user_name=hd.quote(callback.from_user.full_name))
         if callback.message:
-            await callback.message.answer(welcome_text)
+            try:
+                await callback.message.edit_text(welcome_text)
+            except Exception as welcome_edit_error:
+                logging.debug(
+                    "Failed to edit subscription prompt to welcome for user %s: %s",
+                    callback.from_user.id,
+                    welcome_edit_error,
+                )
+                await callback.message.answer(welcome_text)
         else:
             fallback_bot: Optional[Bot] = getattr(callback, "bot", None)
             if fallback_bot:
@@ -577,12 +585,19 @@ async def verify_channel_subscription_callback(
     except Exception as exc:
         logging.debug("Suppressed exception in bot/handlers/user/start.py: %s", exc)
 
-    await send_main_menu(callback,
+    menu_target_event: Union[types.Message, types.CallbackQuery] = callback
+    should_edit_menu_message = bool(callback.message)
+
+    if not settings.DISABLE_WELCOME_MESSAGE and callback.message:
+        menu_target_event = callback.message
+        should_edit_menu_message = False
+
+    await send_main_menu(menu_target_event,
                          settings,
                          i18n_data,
                          subscription_service,
                          session,
-                         is_edit=bool(callback.message))
+                         is_edit=should_edit_menu_message)
 
 
 @router.message(Command("language"))
