@@ -5,7 +5,7 @@ from sqlalchemy.future import select
 from sqlalchemy import update, func, and_
 from sqlalchemy.orm import selectinload
 
-from db.models import Payment, User
+from db.models import Payment
 
 
 async def create_payment_record(session: AsyncSession,
@@ -176,6 +176,38 @@ async def update_provider_payment_and_status(
     return payment
 
 
+async def mark_provider_payment_succeeded_once(
+        session: AsyncSession,
+        payment_db_id: int,
+        provider_payment_id: str) -> bool:
+    """Atomically mark payment as succeeded only once.
+
+    Returns True only for the first successful transition to "succeeded".
+    Returns False when payment is missing or already succeeded.
+    """
+    stmt = (
+        update(Payment)
+        .where(
+            Payment.payment_id == payment_db_id,
+            Payment.status != "succeeded",
+        )
+        .values(
+            status="succeeded",
+            provider_payment_id=provider_payment_id,
+            updated_at=func.now(),
+        )
+    )
+    result = await session.execute(stmt)
+    updated = (result.rowcount or 0) > 0
+    if updated:
+        logging.info(
+            "Payment record %s atomically marked as succeeded (provider id %s).",
+            payment_db_id,
+            provider_payment_id,
+        )
+    return updated
+
+
 async def update_payment_discount_info(
         session: AsyncSession,
         payment_db_id: int,
@@ -205,7 +237,7 @@ async def update_payment_discount_info(
 async def get_financial_statistics(session: AsyncSession) -> Dict[str, Any]:
     """Get comprehensive financial statistics."""
     from datetime import datetime, timedelta
-    from sqlalchemy import and_, text
+    from sqlalchemy import and_
     
     now = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)

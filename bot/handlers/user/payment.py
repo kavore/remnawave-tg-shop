@@ -39,6 +39,7 @@ async def process_successful_payment(session: AsyncSession, bot: Bot,
                                      panel_service: PanelApiService,
                                      subscription_service: SubscriptionService,
                                      referral_service: ReferralService,
+                                     yookassa_service: Optional[YooKassaService] = None,
                                      lknpd_service: Optional[LknpdService] = None):
     metadata = payment_info_from_webhook.get("metadata", {})
     user_id_str = metadata.get("user_id")
@@ -116,6 +117,81 @@ async def process_successful_payment(session: AsyncSession, bot: Bot,
             if not payment_record:
                 logging.error(
                     f"Payment record {payment_db_id} not found for YK ID {yk_payment_id_from_hook}."
+                )
+                return
+
+        # Provider-backed verification (defense-in-depth): verify actual YooKassa payment state
+        if yk_payment_id_from_hook and yookassa_service and yookassa_service.configured:
+            provider_payment_info = await yookassa_service.get_payment_info(yk_payment_id_from_hook)
+            if not provider_payment_info:
+                logging.error(
+                    "YooKassa webhook verification failed: payment %s not found via provider API",
+                    yk_payment_id_from_hook,
+                )
+                return
+
+            provider_status = str(provider_payment_info.get("status") or "")
+            provider_paid = bool(provider_payment_info.get("paid"))
+            if provider_status != "succeeded" or not provider_paid:
+                logging.error(
+                    "YooKassa webhook verification failed: payment %s status/paid mismatch (status=%s, paid=%s)",
+                    yk_payment_id_from_hook,
+                    provider_status,
+                    provider_paid,
+                )
+                return
+
+            provider_metadata_raw = provider_payment_info.get("metadata") or {}
+            provider_metadata = provider_metadata_raw if isinstance(provider_metadata_raw, dict) else {}
+            if str(provider_metadata.get("user_id") or "") != str(user_id):
+                logging.error(
+                    "YooKassa webhook verification failed: user_id mismatch for payment %s (provider=%s, expected=%s)",
+                    yk_payment_id_from_hook,
+                    provider_metadata.get("user_id"),
+                    user_id,
+                )
+                return
+            if payment_db_id and str(provider_metadata.get("payment_db_id") or "") != str(payment_db_id):
+                logging.error(
+                    "YooKassa webhook verification failed: payment_db_id mismatch for payment %s (provider=%s, expected=%s)",
+                    yk_payment_id_from_hook,
+                    provider_metadata.get("payment_db_id"),
+                    payment_db_id,
+                )
+                return
+
+            try:
+                provider_amount = float(provider_payment_info.get("amount_value") or 0.0)
+                if round(provider_amount, 2) != round(payment_value, 2):
+                    logging.error(
+                        "YooKassa webhook verification failed: amount mismatch for payment %s (payload %.2f vs provider %.2f)",
+                        yk_payment_id_from_hook,
+                        payment_value,
+                        provider_amount,
+                    )
+                    return
+                if payment_record and round(float(payment_record.amount), 2) != round(provider_amount, 2):
+                    logging.error(
+                        "YooKassa webhook verification failed: DB amount mismatch for payment %s (db %.2f vs provider %.2f)",
+                        payment_record.payment_id,
+                        float(payment_record.amount),
+                        provider_amount,
+                    )
+                    return
+                provider_currency = str(provider_payment_info.get("amount_currency") or "").upper()
+                if payment_record and provider_currency and str(payment_record.currency or "").upper() != provider_currency:
+                    logging.error(
+                        "YooKassa webhook verification failed: currency mismatch for payment %s (db=%s, provider=%s)",
+                        payment_record.payment_id,
+                        payment_record.currency,
+                        provider_currency,
+                    )
+                    return
+            except Exception as e_amount_verify:
+                logging.error(
+                    "YooKassa webhook verification failed for payment %s: cannot validate amount (%s)",
+                    yk_payment_id_from_hook,
+                    e_amount_verify,
                 )
                 return
 
@@ -470,6 +546,7 @@ async def yookassa_webhook_route(request: web.Request):
         i18n_instance: JsonI18n = request.app['i18n']
         settings: Settings = request.app['settings']
         panel_service: PanelApiService = request.app['panel_service']
+        yookassa_service: Optional[YooKassaService] = request.app.get('yookassa_service')
         subscription_service: SubscriptionService = request.app[
             'subscription_service']
         referral_service: ReferralService = request.app['referral_service']
@@ -567,6 +644,7 @@ async def yookassa_webhook_route(request: web.Request):
                                 session, bot, payment_dict_for_processing,
                                 i18n_instance, settings, panel_service,
                                 subscription_service, referral_service,
+                                yookassa_service,
                                 lknpd_service)
                             await session.commit()
                         else:
@@ -647,8 +725,12 @@ async def yookassa_webhook_route(request: web.Request):
                                                 text=_("payment_method_bound_success"),
                                                 reply_markup=get_back_to_payment_methods_keyboard(i18n_lang, i18n_instance)
                                             )
-                                        except Exception:
-                                            pass
+                                        except Exception as exc:
+                                            logging.debug(
+                                                "Failed to notify user %s about payment method binding: %s",
+                                                user_id,
+                                                exc,
+                                            )
                                         # Attempt to cancel the authorization to avoid charge hold
                                         try:
                                             yk: YooKassaService = request.app.get('yookassa_service')

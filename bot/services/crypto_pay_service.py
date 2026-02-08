@@ -204,12 +204,70 @@ class CryptoPayService:
                     logging.error(f"CryptoPay: Payment record {payment_db_id} not found")
                     return
 
-                await payment_dal.update_provider_payment_and_status(
+                if payment_record.user_id != user_id:
+                    logging.error(
+                        "CryptoPay webhook: user mismatch for payment %s (db=%s, payload=%s)",
+                        payment_db_id,
+                        payment_record.user_id,
+                        user_id,
+                    )
+                    return
+
+                provider_currency = None
+                for candidate in (
+                    getattr(invoice, "fiat", None),
+                    getattr(invoice, "asset", None),
+                    getattr(invoice, "paid_asset", None),
+                    settings.CRYPTOPAY_ASSET,
+                ):
+                    if candidate:
+                        provider_currency = str(candidate).upper()
+                        break
+                expected_currency = str(payment_record.currency or "").upper()
+                if expected_currency and provider_currency and expected_currency != provider_currency:
+                    logging.error(
+                        "CryptoPay webhook: currency mismatch for payment %s (expected %s, got %s)",
+                        payment_db_id,
+                        expected_currency,
+                        provider_currency,
+                    )
+                    return
+
+                if payment_record.status == "succeeded":
+                    logging.info("CryptoPay webhook: payment %s already succeeded", payment_db_id)
+                    return
+
+                try:
+                    expected_amount = float(payment_record.amount)
+                    incoming_amount = float(invoice.amount)
+                    if round(incoming_amount, 2) != round(expected_amount, 2):
+                        logging.error(
+                            "CryptoPay webhook: amount mismatch for payment %s (expected %.2f, got %.2f)",
+                            payment_db_id,
+                            expected_amount,
+                            incoming_amount,
+                        )
+                        return
+                except Exception as amount_exc:
+                    logging.error(
+                        "CryptoPay webhook: failed to compare amount for payment %s: %s",
+                        payment_db_id,
+                        amount_exc,
+                    )
+                    return
+
+                marked = await payment_dal.mark_provider_payment_succeeded_once(
                     session,
                     payment_db_id,
                     str(invoice.invoice_id),
-                    "succeeded",
                 )
+                if not marked:
+                    logging.info(
+                        "CryptoPay webhook: payment %s already processed atomically",
+                        payment_db_id,
+                    )
+                    return
+
                 activation = await subscription_service.activate_subscription(
                     session,
                     user_id,

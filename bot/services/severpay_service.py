@@ -228,6 +228,8 @@ class SeverPayService:
         provider_payment_id = str(data.get("id") or data.get("uid") or "")
         order_id_raw = data.get("order_id")
         status = str(data.get("status") or "").lower()
+        amount_raw = data.get("amount")
+        currency_raw = data.get("currency")
 
         payment_db_id: Optional[int] = None
         try:
@@ -249,16 +251,58 @@ class SeverPayService:
                 logging.error("SeverPay webhook: payment not found (order_id=%s, provider_id=%s)", order_id_raw, provider_payment_id)
                 return web.json_response({"status": False, "msg": "payment_not_found"}, status=404)
 
+            if payment.status == "succeeded" and status == "success":
+                logging.info("SeverPay webhook: payment %s already succeeded", payment.payment_id)
+                return web.json_response({"status": True})
+
+            if status == "success" and amount_raw is not None:
+                try:
+                    incoming_amount = Decimal(str(amount_raw)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    expected_amount = Decimal(str(payment.amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    if incoming_amount != expected_amount:
+                        logging.error(
+                            "SeverPay webhook: amount mismatch for payment %s (expected %s, got %s)",
+                            payment.payment_id,
+                            expected_amount,
+                            incoming_amount,
+                        )
+                        return web.json_response({"status": False, "msg": "amount_mismatch"}, status=400)
+                except Exception as exc:
+                    logging.error(
+                        "SeverPay webhook: failed to compare amounts for payment %s: %s",
+                        payment.payment_id,
+                        exc,
+                    )
+                    return web.json_response({"status": False, "msg": "amount_validation_error"}, status=400)
+
+                if currency_raw:
+                    provider_currency = str(currency_raw).upper()
+                    expected_currency = str(payment.currency or "").upper()
+                    if expected_currency and provider_currency != expected_currency:
+                        logging.error(
+                            "SeverPay webhook: currency mismatch for payment %s (expected %s, got %s)",
+                            payment.payment_id,
+                            expected_currency,
+                            provider_currency,
+                        )
+                        return web.json_response({"status": False, "msg": "currency_mismatch"}, status=400)
+
             payment_months = payment.subscription_duration_months or 1
             sale_mode = "traffic" if self.settings.traffic_sale_mode else "subscription"
             if status == "success":
                 try:
-                    await payment_dal.update_provider_payment_and_status(
+                    provider_id = provider_payment_id or str(payment.payment_id)
+                    marked = await payment_dal.mark_provider_payment_succeeded_once(
                         session,
                         payment.payment_id,
-                        provider_payment_id or str(payment.payment_id),
-                        "succeeded",
+                        provider_id,
                     )
+                    if not marked:
+                        logging.info(
+                            "SeverPay webhook: payment %s already processed atomically",
+                            payment.payment_id,
+                        )
+                        return web.json_response({"status": True})
 
                     activation = await self.subscription_service.activate_subscription(
                         session,
@@ -402,8 +446,8 @@ class SeverPayService:
                 _ = lambda k, **kw: self.i18n.gettext(lang, k, **kw) if self.i18n else k
                 try:
                     await self.bot.send_message(payment.user_id, _("payment_failed"))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug("SeverPay webhook: failed to send cancellation message to user %s: %s", payment.user_id, exc)
                 return web.json_response({"status": True})
 
             if status in {"process", "new"}:

@@ -238,7 +238,10 @@ class FreeKassaService:
 
         if self.shop_id and self.second_secret:
             signature_source = f"{self.shop_id}:{amount}:{self.second_secret}:{merchant_order_id}"
-            expected_signature = hashlib.md5(signature_source.encode("utf-8")).hexdigest()
+            expected_signature = hashlib.md5(
+                signature_source.encode("utf-8"),
+                usedforsecurity=False,
+            ).hexdigest()
             if expected_signature.lower() == provided_signature.lower():
                 return True
 
@@ -317,6 +320,16 @@ class FreeKassaService:
                 logging.error(f"FreeKassa webhook: payment {payment_db_id} not found")
                 return web.Response(status=404, text="payment_not_found")
 
+            if payment.currency and str(payment.currency).upper() != str(self.default_currency or payment.currency).upper():
+                # FreeKassa sends amount without currency; ensure DB currency matches configured service currency
+                logging.error(
+                    "FreeKassa webhook: currency mismatch for payment %s (db=%s, expected=%s)",
+                    payment_db_id,
+                    payment.currency,
+                    self.default_currency,
+                )
+                return web.Response(status=400, text="currency_mismatch")
+
             if payment.status == "succeeded":
                 logging.info(f"FreeKassa webhook: payment {payment_db_id} already succeeded")
                 return web.Response(text="YES")
@@ -326,22 +339,30 @@ class FreeKassaService:
                 amount_decimal = Decimal(amount_str)
                 expected_amount = Decimal(str(payment.amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
                 if amount_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) != expected_amount:
-                    logging.warning(
+                    logging.error(
                         f"FreeKassa webhook: amount mismatch for payment {payment_db_id} "
                         f"(expected {expected_amount}, got {amount_decimal})"
                     )
+                    return web.Response(status=400, text="amount_mismatch")
             except Exception as e:
-                logging.warning(f"FreeKassa webhook: failed to compare amount for payment {payment_db_id}: {e}")
+                logging.error(f"FreeKassa webhook: failed to compare amount for payment {payment_db_id}: {e}")
+                return web.Response(status=400, text="amount_validation_error")
 
             activation = None
             referral_bonus = None
             try:
-                await payment_dal.update_provider_payment_and_status(
+                provider_id = str(provider_payment_id or f"freekassa:{order_id_str}")
+                marked = await payment_dal.mark_provider_payment_succeeded_once(
                     session=session,
                     payment_db_id=payment.payment_id,
-                    provider_payment_id=str(provider_payment_id or f"freekassa:{order_id_str}"),
-                    new_status="succeeded",
+                    provider_payment_id=provider_id,
                 )
+                if not marked:
+                    logging.info(
+                        "FreeKassa webhook: payment %s already processed atomically",
+                        payment.payment_id,
+                    )
+                    return web.Response(text="YES")
 
                 months = payment.subscription_duration_months or 1
                 sale_mode = "traffic" if self.settings.traffic_sale_mode else "subscription"
