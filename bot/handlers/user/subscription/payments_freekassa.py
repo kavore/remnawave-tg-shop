@@ -67,7 +67,7 @@ async def pay_fk_callback_handler(
         if sale_mode == "traffic"
         else get_text("payment_description_subscription", months=int(months))
     )
-    currency_code = getattr(freekassa_service, "default_currency", None) or settings.DEFAULT_CURRENCY_SYMBOL or "RUB"
+    currency_code = getattr(freekassa_service, "default_currency", None) or "RUB"
 
     # Price is already discounted at payments_subscription.py stage
     # Service will handle discount metadata if needed

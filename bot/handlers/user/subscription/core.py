@@ -63,7 +63,7 @@ async def display_subscription_options(
             await event.answer(err_msg)
         return
 
-    currency_symbol_val = settings.DEFAULT_CURRENCY_SYMBOL
+    currency_symbol_val = "RUB"
     traffic_packages = getattr(settings, "traffic_packages", {}) or {}
     stars_traffic_packages = getattr(settings, "stars_traffic_packages", {}) or {}
     traffic_mode = bool(getattr(settings, "traffic_sale_mode", False) or stars_traffic_packages)

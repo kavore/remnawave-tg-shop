@@ -98,7 +98,7 @@ async def process_successful_payment(session: AsyncSession, bot: Bot,
                         session,
                         user_id=user_id,
                         amount=payment_value,
-                        currency=amount_data.get("currency", settings.DEFAULT_CURRENCY_SYMBOL),
+                        currency=amount_data.get("currency", "RUB"),
                         months=months_for_record or 1,
                         description=payment_info_from_webhook.get(
                             "description") or f"Auto-renewal for {months_for_record or subscription_months} months",
@@ -471,7 +471,7 @@ async def process_successful_payment(session: AsyncSession, bot: Bot,
             await notification_service.notify_payment_received(
                 user_id=user_id,
                 amount=payment_value,
-                currency=settings.DEFAULT_CURRENCY_SYMBOL,
+                currency="RUB",
                 months=int(subscription_months) if sale_mode != "traffic" else 0,
                 payment_provider="yookassa",  # This is specifically for YooKassa webhook
                 username=user.username if user else None,

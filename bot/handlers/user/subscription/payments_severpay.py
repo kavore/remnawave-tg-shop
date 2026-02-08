@@ -66,7 +66,7 @@ async def pay_severpay_callback_handler(
         if sale_mode == "traffic"
         else get_text("payment_description_subscription", months=int(months))
     )
-    currency_code = settings.DEFAULT_CURRENCY_SYMBOL or "RUB"
+    currency_code = "RUB"
 
     # Price is already discounted at payments_subscription.py stage
     # Service will handle discount metadata if needed

@@ -49,7 +49,7 @@ async def select_subscription_period_callback_handler(
 
     price_rub = price_source.get(months)
     stars_price = stars_price_source.get(months)
-    currency_symbol_val = settings.DEFAULT_CURRENCY_SYMBOL
+    currency_symbol_val = "RUB"
 
     # Check for active discount and apply if exists
     discount_text = ""
