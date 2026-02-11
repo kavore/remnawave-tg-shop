@@ -477,14 +477,13 @@ async def start_command_handler(message: types.Message,
     # Auto-apply promo code if provided via start parameter
     if promo_code_to_apply:
         try:
-            from bot.services.promo_code_service import PromoCodeService
             promo_code_service = PromoCodeService(settings, subscription_service, message.bot, i18n)
 
-            success, result = await promo_code_service.apply_promo_code(
+            success_bonus, bonus_result = await promo_code_service.apply_promo_code(
                 session, user_id, promo_code_to_apply, current_lang
             )
 
-            if success:
+            if success_bonus:
                 await session.commit()
                 logging.info(f"Auto-applied promo code '{promo_code_to_apply}' for user {user_id}")
 
@@ -494,7 +493,7 @@ async def start_command_handler(message: types.Message,
                 connect_button_url = active.get("connect_button_url") if active else None
                 config_link_text = config_link_display or _("config_link_not_available")
 
-                new_end_date = result if isinstance(result, datetime) else None
+                new_end_date = bonus_result if isinstance(bonus_result, datetime) else None
 
                 promo_success_text = _(
                     "promo_code_applied_success_full",
@@ -517,10 +516,49 @@ async def start_command_handler(message: types.Message,
 
                 # Don't show main menu if promo was successfully applied
                 return
-            else:
-                await session.rollback()
-                logging.warning(f"Failed to auto-apply promo code '{promo_code_to_apply}' for user {user_id}: {result}")
-                # Continue to show main menu if promo failed
+
+            success_discount, discount_result = await promo_code_service.apply_discount_promo_code(
+                session, user_id, promo_code_to_apply, current_lang
+            )
+
+            if success_discount:
+                await session.commit()
+                discount_pct = discount_result if isinstance(discount_result, int) else 0
+                logging.info(
+                    f"Auto-applied discount promo code '{promo_code_to_apply}' for user {user_id}: {discount_pct}%"
+                )
+
+                if settings.LOG_PROMO_ACTIVATIONS:
+                    try:
+                        from bot.services.notification_service import NotificationService
+                        notification_service = NotificationService(message.bot, settings, i18n)
+                        await notification_service.notify_discount_promo_activation(
+                            user_id=user_id,
+                            promo_code=promo_code_to_apply.upper(),
+                            discount_percentage=discount_pct,
+                            username=user.username,
+                        )
+                    except Exception as notify_error:
+                        logging.error(f"Failed to send discount promo activation notification: {notify_error}")
+
+                from bot.keyboards.inline.user_keyboards import get_back_to_main_menu_markup
+                await message.answer(
+                    _(
+                        "discount_promo_code_applied_success",
+                        code=hd.quote(promo_code_to_apply.upper()),
+                        discount=discount_pct,
+                    ),
+                    reply_markup=get_back_to_main_menu_markup(current_lang, i18n),
+                    parse_mode="HTML",
+                )
+                return
+
+            await session.rollback()
+            logging.warning(
+                f"Failed to auto-apply promo code '{promo_code_to_apply}' for user {user_id}. "
+                f"Bonus reason: {bonus_result}. Discount reason: {discount_result}"
+            )
+            # Continue to show main menu if promo failed
 
         except Exception as e:
             logging.error(f"Error auto-applying promo code '{promo_code_to_apply}' for user {user_id}: {e}")
