@@ -625,110 +625,117 @@ async def yookassa_webhook_route(request: web.Request):
 
         async with async_session_factory() as session:
             try:
-                    if notification_object.event == YOOKASSA_EVENT_PAYMENT_SUCCEEDED:
-                        if payment_dict_for_processing.get(
-                                "paid") and payment_dict_for_processing.get(
-                                    "status") == "succeeded":
-                            await process_successful_payment(
-                                session, bot, payment_dict_for_processing,
-                                i18n_instance, settings, panel_service,
-                                subscription_service, referral_service,
-                                yookassa_service,
-                                lknpd_service)
-                            await session.commit()
-                        else:
-                            logging.warning(
-                                f"Payment Succeeded event for {payment_dict_for_processing.get('id')} "
-                                f"but data not as expected: status='{payment_dict_for_processing.get('status')}', "
-                                f"paid='{payment_dict_for_processing.get('paid')}'"
-                            )
-                    elif notification_object.event == YOOKASSA_EVENT_PAYMENT_CANCELED:
-                        await process_cancelled_payment(
+                if notification_object.event == YOOKASSA_EVENT_PAYMENT_SUCCEEDED:
+                    if not yookassa_service or not yookassa_service.configured:
+                        logging.critical(
+                            "YooKassa webhook rejected: verification service is not configured for succeeded event (payment_id=%s)",
+                            payment_dict_for_processing.get("id"),
+                        )
+                        return web.Response(status=503, text="yookassa_verification_required")
+
+                    if payment_dict_for_processing.get(
+                            "paid") and payment_dict_for_processing.get(
+                                "status") == "succeeded":
+                        await process_successful_payment(
                             session, bot, payment_dict_for_processing,
-                            i18n_instance, settings)
+                            i18n_instance, settings, panel_service,
+                            subscription_service, referral_service,
+                            yookassa_service,
+                            lknpd_service)
                         await session.commit()
-                    elif notification_object.event == YOOKASSA_EVENT_PAYMENT_WAITING_FOR_CAPTURE:
-                        # Bind-only flow: save method and cancel auth if metadata has bind_only
-                        metadata = payment_dict_for_processing.get("metadata", {}) or {}
-                        if settings.yookassa_autopayments_active and metadata.get("bind_only") == "1":
-                            try:
-                                user_id_str = metadata.get("user_id")
-                                if user_id_str and user_id_str.isdigit():
-                                    user_id = int(user_id_str)
-                                    payment_method = payment_dict_for_processing.get("payment_method")
-                                    if isinstance(payment_method, dict) and payment_method.get("id"):
-                                        pm_type = payment_method.get("type")
-                                        title = payment_method.get("title")
-                                        card = payment_method.get("card") or {}
-                                        account_number = payment_method.get("account_number") or payment_method.get("account")
-                                        display_network = None
-                                        display_last4 = None
-                                        if (pm_type or "").lower() in {"bank_card", "bank-card", "card"}:
-                                            display_network = card.get("card_type") or title or "Card"
-                                            display_last4 = card.get("last4")
-                                        elif (pm_type or "").lower() in {"yoo_money", "yoomoney", "yoo-money", "wallet"}:
-                                            # Normalize wallet display name to avoid leaking full account from title
-                                            display_network = "YooMoney"
-                                            if isinstance(account_number, str) and len(account_number) >= 4:
-                                                display_last4 = account_number[-4:]
-                                            else:
-                                                display_last4 = None
+                    else:
+                        logging.warning(
+                            f"Payment Succeeded event for {payment_dict_for_processing.get('id')} "
+                            f"but data not as expected: status='{payment_dict_for_processing.get('status')}', "
+                            f"paid='{payment_dict_for_processing.get('paid')}'"
+                        )
+                elif notification_object.event == YOOKASSA_EVENT_PAYMENT_CANCELED:
+                    await process_cancelled_payment(
+                        session, bot, payment_dict_for_processing,
+                        i18n_instance, settings)
+                    await session.commit()
+                elif notification_object.event == YOOKASSA_EVENT_PAYMENT_WAITING_FOR_CAPTURE:
+                    # Bind-only flow: save method and cancel auth if metadata has bind_only
+                    metadata = payment_dict_for_processing.get("metadata", {}) or {}
+                    if settings.yookassa_autopayments_active and metadata.get("bind_only") == "1":
+                        try:
+                            user_id_str = metadata.get("user_id")
+                            if user_id_str and user_id_str.isdigit():
+                                user_id = int(user_id_str)
+                                payment_method = payment_dict_for_processing.get("payment_method")
+                                if isinstance(payment_method, dict) and payment_method.get("id"):
+                                    pm_type = payment_method.get("type")
+                                    title = payment_method.get("title")
+                                    card = payment_method.get("card") or {}
+                                    account_number = payment_method.get("account_number") or payment_method.get("account")
+                                    display_network = None
+                                    display_last4 = None
+                                    if (pm_type or "").lower() in {"bank_card", "bank-card", "card"}:
+                                        display_network = card.get("card_type") or title or "Card"
+                                        display_last4 = card.get("last4")
+                                    elif (pm_type or "").lower() in {"yoo_money", "yoomoney", "yoo-money", "wallet"}:
+                                        # Normalize wallet display name to avoid leaking full account from title
+                                        display_network = "YooMoney"
+                                        if isinstance(account_number, str) and len(account_number) >= 4:
+                                            display_last4 = account_number[-4:]
                                         else:
-                                            display_network = title or (pm_type.upper() if pm_type else "Payment method")
                                             display_last4 = None
-                                        await user_billing_dal.upsert_yk_payment_method(
+                                    else:
+                                        display_network = title or (pm_type.upper() if pm_type else "Payment method")
+                                        display_last4 = None
+                                    await user_billing_dal.upsert_yk_payment_method(
+                                        session,
+                                        user_id=user_id,
+                                        payment_method_id=payment_method.get("id"),
+                                        card_last4=display_last4,
+                                        card_network=display_network,
+                                    )
+                                    await session.commit()
+                                    # Save multi-card entry and mark default if first
+                                    try:
+                                        from db.dal import user_billing_dal as ub
+                                        await ub.upsert_user_payment_method(
                                             session,
                                             user_id=user_id,
-                                            payment_method_id=payment_method.get("id"),
+                                            provider_payment_method_id=payment_method.get("id"),
+                                            provider="yookassa",
                                             card_last4=display_last4,
                                             card_network=display_network,
+                                            set_default=True,
                                         )
                                         await session.commit()
-                                        # Save multi-card entry and mark default if first
-                                        try:
-                                            from db.dal import user_billing_dal as ub
-                                            await ub.upsert_user_payment_method(
-                                                session,
-                                                user_id=user_id,
-                                                provider_payment_method_id=payment_method.get("id"),
-                                                provider="yookassa",
-                                                card_last4=display_last4,
-                                                card_network=display_network,
-                                                set_default=True,
-                                            )
-                                            await session.commit()
-                                        except Exception:
-                                            await session.rollback()
-                                        # Notify user about successful binding with Back button
-                                        try:
-                                            # Use user's DB language for bind success notification
-                                            i18n_lang = settings.DEFAULT_LANGUAGE
-                                            from db.dal import user_dal
-                                            db_user = await user_dal.get_user_by_id(session, user_id)
-                                            if db_user and db_user.language_code:
-                                                i18n_lang = db_user.language_code
-                                            _ = lambda key, **kwargs: i18n_instance.gettext(i18n_lang, key, **kwargs)
-                                            from bot.keyboards.inline.user_keyboards import get_back_to_payment_methods_keyboard
-                                            await bot.send_message(
-                                                chat_id=user_id,
-                                                text=_("payment_method_bound_success"),
-                                                reply_markup=get_back_to_payment_methods_keyboard(i18n_lang, i18n_instance)
-                                            )
-                                        except Exception as exc:
-                                            logging.debug(
-                                                "Failed to notify user %s about payment method binding: %s",
-                                                user_id,
-                                                exc,
-                                            )
-                                        # Attempt to cancel the authorization to avoid charge hold
-                                        try:
-                                            yk: YooKassaService = request.app.get('yookassa_service')
-                                            if yk:
-                                                await yk.cancel_payment(payment_dict_for_processing.get("id"))
-                                        except Exception:
-                                            logging.exception("Failed to cancel bind-only payment auth")
-                            except Exception:
-                                logging.exception("Failed to handle bind-only waiting_for_capture webhook")
+                                    except Exception:
+                                        await session.rollback()
+                                    # Notify user about successful binding with Back button
+                                    try:
+                                        # Use user's DB language for bind success notification
+                                        i18n_lang = settings.DEFAULT_LANGUAGE
+                                        from db.dal import user_dal
+                                        db_user = await user_dal.get_user_by_id(session, user_id)
+                                        if db_user and db_user.language_code:
+                                            i18n_lang = db_user.language_code
+                                        _ = lambda key, **kwargs: i18n_instance.gettext(i18n_lang, key, **kwargs)
+                                        from bot.keyboards.inline.user_keyboards import get_back_to_payment_methods_keyboard
+                                        await bot.send_message(
+                                            chat_id=user_id,
+                                            text=_("payment_method_bound_success"),
+                                            reply_markup=get_back_to_payment_methods_keyboard(i18n_lang, i18n_instance)
+                                        )
+                                    except Exception as exc:
+                                        logging.debug(
+                                            "Failed to notify user %s about payment method binding: %s",
+                                            user_id,
+                                            exc,
+                                        )
+                                    # Attempt to cancel the authorization to avoid charge hold
+                                    try:
+                                        yk: YooKassaService = request.app.get('yookassa_service')
+                                        if yk:
+                                            await yk.cancel_payment(payment_dict_for_processing.get("id"))
+                                    except Exception:
+                                        logging.exception("Failed to cancel bind-only payment auth")
+                        except Exception:
+                            logging.exception("Failed to handle bind-only waiting_for_capture webhook")
             except Exception as e_webhook_db_processing:
                 await session.rollback()
                 logging.error(

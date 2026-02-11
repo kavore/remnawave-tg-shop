@@ -81,6 +81,8 @@ class PromoCodeService:
             return
 
         now_utc = datetime.now(timezone.utc)
+        notifications_to_send: list[tuple[int, str]] = []
+
         async with self._async_session_factory() as session:
             expired_discounts = await active_discount_dal.get_expired_active_discounts(
                 session,
@@ -116,17 +118,7 @@ class PromoCodeService:
                     code_part=(f" (<code>{promo_code}</code>)" if promo_code else ""),
                 )
 
-                try:
-                    await self.bot.send_message(
-                        chat_id=expired.user_id,
-                        text=message_text,
-                        parse_mode="HTML",
-                    )
-                except Exception:
-                    logging.exception(
-                        "Failed to send discount expiration message to user %s",
-                        expired.user_id,
-                    )
+                notifications_to_send.append((expired.user_id, message_text))
 
                 logging.info(
                     "Expired discount reservation removed: user=%s, promo=%s",
@@ -135,6 +127,19 @@ class PromoCodeService:
                 )
 
             await session.commit()
+
+        for user_id, message_text in notifications_to_send:
+            try:
+                await self.bot.send_message(
+                    chat_id=user_id,
+                    text=message_text,
+                    parse_mode="HTML",
+                )
+            except Exception:
+                logging.exception(
+                    "Failed to send discount expiration message to user %s",
+                    user_id,
+                )
 
     async def apply_promo_code(
         self,
