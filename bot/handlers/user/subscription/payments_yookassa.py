@@ -18,6 +18,8 @@ from db.dal import payment_dal, user_billing_dal, active_discount_dal
 router = Router(name="user_subscription_payments_yookassa_router")
 
 
+from bot.handlers.user.subscription.payments_subscription import resolve_fiat_offer_price_for_user
+
 def _format_value(val: float) -> str:
     return str(int(val)) if float(val).is_integer() else f"{val:g}"
 
@@ -404,8 +406,46 @@ async def pay_yk_callback_handler(callback: types.CallbackQuery, settings: Setti
             logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_yookassa.py: %s", exc)
         return
 
-    months, price_rub, sale_mode = parsed
+    months, callback_price_rub, sale_mode = parsed
     user_id = callback.from_user.id
+
+    resolved_price_rub = await resolve_fiat_offer_price_for_user(
+        session=session,
+        settings=settings,
+        user_id=user_id,
+        months=months,
+        sale_mode=sale_mode,
+        promo_code_service=promo_code_service,
+    )
+    if resolved_price_rub is None:
+        logging.warning(
+            "YooKassa: no server-side price for user %s, value=%s, mode=%s",
+            user_id,
+            months,
+            sale_mode,
+        )
+        try:
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_yookassa.py: %s", exc)
+        return
+
+    if abs(resolved_price_rub - callback_price_rub) > 0.01:
+        logging.warning(
+            "YooKassa: callback price mismatch for user %s, value=%s, mode=%s, callback=%.2f, resolved=%.2f",
+            user_id,
+            months,
+            sale_mode,
+            callback_price_rub,
+            resolved_price_rub,
+        )
+        try:
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_yookassa.py: %s", exc)
+        return
+
+    price_rub = resolved_price_rub
     currency_code_for_yk = "RUB"
     autopay_enabled = bool(settings.yookassa_autopayments_active and sale_mode != "traffic" and not settings.traffic_sale_mode)
     autopay_require_binding = bool(
@@ -523,8 +563,45 @@ async def pay_yk_new_card_handler(callback: types.CallbackQuery, settings: Setti
             logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_yookassa.py: %s", exc)
         return
 
-    months, price_rub, sale_mode = parsed
+    months, callback_price_rub, sale_mode = parsed
     user_id = callback.from_user.id
+    resolved_price_rub = await resolve_fiat_offer_price_for_user(
+        session=session,
+        settings=settings,
+        user_id=user_id,
+        months=months,
+        sale_mode=sale_mode,
+        promo_code_service=promo_code_service,
+    )
+    if resolved_price_rub is None:
+        logging.warning(
+            "YooKassa: no server-side price for new-card flow, user=%s, value=%s, mode=%s",
+            user_id,
+            months,
+            sale_mode,
+        )
+        try:
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_yookassa.py: %s", exc)
+        return
+
+    if abs(resolved_price_rub - callback_price_rub) > 0.01:
+        logging.warning(
+            "YooKassa: callback price mismatch in new-card flow, user=%s, value=%s, mode=%s, callback=%.2f, resolved=%.2f",
+            user_id,
+            months,
+            sale_mode,
+            callback_price_rub,
+            resolved_price_rub,
+        )
+        try:
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_yookassa.py: %s", exc)
+        return
+
+    price_rub = resolved_price_rub
     currency_code_for_yk = "RUB"
     autopay_enabled = bool(settings.yookassa_autopayments_active and sale_mode != "traffic" and not settings.traffic_sale_mode)
     autopay_require_binding = bool(
@@ -555,7 +632,7 @@ async def pay_yk_new_card_handler(callback: types.CallbackQuery, settings: Setti
 
 
 @router.callback_query(F.data.startswith("pay_yk_saved_list:"))
-async def pay_yk_saved_list_handler(callback: types.CallbackQuery, settings: Settings, i18n_data: dict, yookassa_service: YooKassaService, session: AsyncSession):
+async def pay_yk_saved_list_handler(callback: types.CallbackQuery, settings: Settings, i18n_data: dict, yookassa_service: YooKassaService, session: AsyncSession, promo_code_service=None):
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
     i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
     get_text = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
@@ -588,7 +665,7 @@ async def pay_yk_saved_list_handler(callback: types.CallbackQuery, settings: Set
 
     try:
         months = float(parts[0])
-        price_rub = float(parts[1])
+        callback_price_rub = float(parts[1])
         page = int(parts[2]) if len(parts) > 2 else 0
         sale_mode = parts[3] if len(parts) > 3 else "subscription"
     except (ValueError, IndexError):
@@ -608,6 +685,43 @@ async def pay_yk_saved_list_handler(callback: types.CallbackQuery, settings: Set
         return
 
     user_id = callback.from_user.id
+    resolved_price_rub = await resolve_fiat_offer_price_for_user(
+        session=session,
+        settings=settings,
+        user_id=user_id,
+        months=months,
+        sale_mode=sale_mode,
+        promo_code_service=promo_code_service,
+    )
+    if resolved_price_rub is None:
+        logging.warning(
+            "YooKassa: no server-side price for saved-list flow, user=%s, value=%s, mode=%s",
+            user_id,
+            months,
+            sale_mode,
+        )
+        try:
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_yookassa.py: %s", exc)
+        return
+
+    if abs(resolved_price_rub - callback_price_rub) > 0.01:
+        logging.warning(
+            "YooKassa: callback price mismatch in saved-list flow, user=%s, value=%s, mode=%s, callback=%.2f, resolved=%.2f",
+            user_id,
+            months,
+            sale_mode,
+            callback_price_rub,
+            resolved_price_rub,
+        )
+        try:
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_yookassa.py: %s", exc)
+        return
+
+    price_rub = resolved_price_rub
     try:
         saved_methods = await user_billing_dal.list_user_payment_methods(
             session, user_id, provider="yookassa"
@@ -744,7 +858,7 @@ async def pay_yk_use_saved_handler(callback: types.CallbackQuery, settings: Sett
 
     try:
         months = float(parts[0])
-        price_rub = float(parts[1])
+        callback_price_rub = float(parts[1])
         sale_mode = parts[3] if len(parts) > 3 else "subscription"
     except (ValueError, IndexError):
         logging.error(f"pay_yk_use_saved months/price parsing error: {callback.data}")
@@ -764,6 +878,41 @@ async def pay_yk_use_saved_handler(callback: types.CallbackQuery, settings: Sett
 
     method_identifier = parts[2]
     user_id = callback.from_user.id
+    resolved_price_rub = await resolve_fiat_offer_price_for_user(
+        session=session,
+        settings=settings,
+        user_id=user_id,
+        months=months,
+        sale_mode=sale_mode,
+        promo_code_service=promo_code_service,
+    )
+    if resolved_price_rub is None:
+        logging.warning(
+            "YooKassa: no server-side price for use-saved flow, user=%s, value=%s, mode=%s",
+            user_id,
+            months,
+            sale_mode,
+        )
+        try:
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_yookassa.py: %s", exc)
+        return
+
+    if abs(resolved_price_rub - callback_price_rub) > 0.01:
+        logging.warning(
+            "YooKassa: callback price mismatch in use-saved flow, user=%s, value=%s, mode=%s, callback=%.2f, resolved=%.2f",
+            user_id,
+            months,
+            sale_mode,
+            callback_price_rub,
+            resolved_price_rub,
+        )
+        try:
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_yookassa.py: %s", exc)
+        return
 
     try:
         saved_methods = await user_billing_dal.list_user_payment_methods(
@@ -791,6 +940,7 @@ async def pay_yk_use_saved_handler(callback: types.CallbackQuery, settings: Sett
             logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_yookassa.py: %s", exc)
         return
 
+    price_rub = resolved_price_rub
     currency_code_for_yk = "RUB"
 
     await _initiate_yk_payment(

@@ -12,6 +12,36 @@ from config.settings import Settings
 router = Router(name="user_subscription_payments_selection_router")
 
 
+async def resolve_fiat_offer_price_for_user(
+    session: AsyncSession,
+    settings: Settings,
+    user_id: int,
+    months: float,
+    sale_mode: str,
+    promo_code_service=None,
+) -> Optional[float]:
+    """Resolve offer price server-side to prevent callback payload tampering."""
+    price_source = (
+        getattr(settings, "traffic_packages", {}) or {}
+        if sale_mode == "traffic"
+        else (settings.subscription_options or {})
+    )
+    base_price = price_source.get(months)
+    if base_price is None:
+        return None
+
+    resolved_price = float(base_price)
+    if promo_code_service:
+        active_discount_info = await promo_code_service.get_user_active_discount(session, user_id)
+        if active_discount_info:
+            discount_pct, _ = active_discount_info
+            resolved_price, _ = promo_code_service.calculate_discounted_price(
+                resolved_price,
+                discount_pct,
+            )
+    return resolved_price
+
+
 @router.callback_query(F.data.startswith("subscribe_period:"))
 async def select_subscription_period_callback_handler(
     callback: types.CallbackQuery,

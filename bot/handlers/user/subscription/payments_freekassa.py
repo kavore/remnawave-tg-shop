@@ -14,6 +14,8 @@ from db.dal import payment_dal
 router = Router(name="user_subscription_payments_freekassa_router")
 
 
+from bot.handlers.user.subscription.payments_subscription import resolve_fiat_offer_price_for_user
+
 @router.callback_query(F.data.startswith("pay_fk:"))
 async def pay_fk_callback_handler(
     callback: types.CallbackQuery,
@@ -50,7 +52,7 @@ async def pay_fk_callback_handler(
         _, data_payload = callback.data.split(":", 1)
         parts = data_payload.split(":")
         months = float(parts[0])
-        price_rub = float(parts[1])
+        callback_price_rub = float(parts[1])
         sale_mode = parts[2] if len(parts) > 2 else "subscription"
     except (ValueError, IndexError):
         logging.error(f"Invalid pay_fk data in callback: {callback.data}")
@@ -61,6 +63,43 @@ async def pay_fk_callback_handler(
         return
 
     user_id = callback.from_user.id
+    resolved_price_rub = await resolve_fiat_offer_price_for_user(
+        session=session,
+        settings=settings,
+        user_id=user_id,
+        months=months,
+        sale_mode=sale_mode,
+        promo_code_service=promo_code_service,
+    )
+    if resolved_price_rub is None:
+        logging.warning(
+            "FreeKassa: no server-side price for user %s, value=%s, mode=%s",
+            user_id,
+            months,
+            sale_mode,
+        )
+        try:
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_freekassa.py: %s", exc)
+        return
+
+    if abs(resolved_price_rub - callback_price_rub) > 0.01:
+        logging.warning(
+            "FreeKassa: callback price mismatch for user %s, value=%s, mode=%s, callback=%.2f, resolved=%.2f",
+            user_id,
+            months,
+            sale_mode,
+            callback_price_rub,
+            resolved_price_rub,
+        )
+        try:
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_freekassa.py: %s", exc)
+        return
+
+    price_rub = resolved_price_rub
     human_value = str(int(months)) if float(months).is_integer() else f"{months:g}"
     payment_description = (
         get_text("payment_description_traffic", traffic_gb=human_value)
@@ -69,8 +108,6 @@ async def pay_fk_callback_handler(
     )
     currency_code = getattr(freekassa_service, "default_currency", None) or "RUB"
 
-    # Price is already discounted at payments_subscription.py stage
-    # Service will handle discount metadata if needed
     payment_record_payload = {
         "user_id": user_id,
         "amount": price_rub,

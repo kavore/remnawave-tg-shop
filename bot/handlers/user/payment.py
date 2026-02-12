@@ -627,6 +627,51 @@ async def yookassa_webhook_route(request: web.Request):
 
         async with async_session_factory() as session:
             try:
+                # Defense-in-depth: for state mutations beyond succeeded, verify against provider API.
+                if notification_object.event in {
+                    YOOKASSA_EVENT_PAYMENT_CANCELED,
+                    YOOKASSA_EVENT_PAYMENT_WAITING_FOR_CAPTURE,
+                }:
+                    if not yookassa_service or not yookassa_service.configured:
+                        logging.critical(
+                            "YooKassa webhook rejected: verification service is not configured for event %s (payment_id=%s)",
+                            notification_object.event,
+                            payment_dict_for_processing.get("id"),
+                        )
+                        return web.Response(status=503, text="yookassa_verification_required")
+
+                    provider_payment_info = await yookassa_service.get_payment_info(
+                        payment_dict_for_processing.get("id")
+                    )
+                    if not provider_payment_info:
+                        logging.error(
+                            "YooKassa webhook verification failed: payment %s not found via provider API",
+                            payment_dict_for_processing.get("id"),
+                        )
+                        return web.Response(status=503, text="yookassa_verification_failed")
+
+                    provider_status = str(provider_payment_info.get("status") or "")
+                    provider_paid = bool(provider_payment_info.get("paid"))
+                    provider_metadata_raw = provider_payment_info.get("metadata") or {}
+                    provider_metadata = provider_metadata_raw if isinstance(provider_metadata_raw, dict) else {}
+
+                    payment_dict_for_processing["status"] = provider_status or payment_dict_for_processing.get("status")
+                    payment_dict_for_processing["paid"] = provider_paid
+                    payment_dict_for_processing["metadata"] = dict(provider_metadata)
+
+                    provider_amount_value = provider_payment_info.get("amount_value")
+                    provider_amount_currency = provider_payment_info.get("amount_currency")
+                    if provider_amount_value is not None and provider_amount_currency:
+                        payment_dict_for_processing["amount"] = {
+                            "value": str(provider_amount_value),
+                            "currency": str(provider_amount_currency),
+                        }
+
+                    provider_pm = provider_payment_info.get("payment_method")
+                    if isinstance(provider_pm, dict) and provider_pm.get("id"):
+                        # Use provider payment_method as authoritative.
+                        payment_dict_for_processing["payment_method"] = provider_pm
+
                 if notification_object.event == YOOKASSA_EVENT_PAYMENT_SUCCEEDED:
                     if not yookassa_service or not yookassa_service.configured:
                         logging.critical(
@@ -669,6 +714,13 @@ async def yookassa_webhook_route(request: web.Request):
                         await session.rollback()
                         return web.Response(status=503, text="yookassa_invalid_succeeded_payload")
                 elif notification_object.event == YOOKASSA_EVENT_PAYMENT_CANCELED:
+                    if payment_dict_for_processing.get("status") not in {"canceled", "cancelled"}:
+                        logging.error(
+                            "YooKassa webhook rejected: canceled event status mismatch for payment %s (status=%s)",
+                            payment_dict_for_processing.get("id"),
+                            payment_dict_for_processing.get("status"),
+                        )
+                        return web.Response(status=503, text="yookassa_invalid_canceled_payload")
                     await process_cancelled_payment(
                         session, bot, payment_dict_for_processing,
                         i18n_instance, settings)
@@ -677,6 +729,13 @@ async def yookassa_webhook_route(request: web.Request):
                     # Bind-only flow: save method and cancel auth if metadata has bind_only
                     metadata = payment_dict_for_processing.get("metadata", {}) or {}
                     if settings.yookassa_autopayments_active and metadata.get("bind_only") == "1":
+                        if payment_dict_for_processing.get("status") != "waiting_for_capture":
+                            logging.error(
+                                "YooKassa webhook rejected: waiting_for_capture event status mismatch for payment %s (status=%s)",
+                                payment_dict_for_processing.get("id"),
+                                payment_dict_for_processing.get("status"),
+                            )
+                            return web.Response(status=503, text="yookassa_invalid_waiting_payload")
                         try:
                             user_id_str = metadata.get("user_id")
                             if user_id_str and user_id_str.isdigit():
@@ -685,23 +744,27 @@ async def yookassa_webhook_route(request: web.Request):
                                 if isinstance(payment_method, dict) and payment_method.get("id"):
                                     pm_type = payment_method.get("type")
                                     title = payment_method.get("title")
+
+                                    # Support both webhook shape (nested card) and provider shape (card_last4)
+                                    last4_val = None
                                     card = payment_method.get("card") or {}
-                                    account_number = payment_method.get("account_number") or payment_method.get("account")
+                                    if isinstance(card, dict) and card.get("last4"):
+                                        last4_val = card.get("last4")
+                                    if not last4_val:
+                                        last4_val = payment_method.get("card_last4")
+
                                     display_network = None
                                     display_last4 = None
                                     if (pm_type or "").lower() in {"bank_card", "bank-card", "card"}:
-                                        display_network = card.get("card_type") or title or "Card"
-                                        display_last4 = card.get("last4")
+                                        display_network = title or "Card"
+                                        display_last4 = last4_val
                                     elif (pm_type or "").lower() in {"yoo_money", "yoomoney", "yoo-money", "wallet"}:
-                                        # Normalize wallet display name to avoid leaking full account from title
                                         display_network = "YooMoney"
-                                        if isinstance(account_number, str) and len(account_number) >= 4:
-                                            display_last4 = account_number[-4:]
-                                        else:
-                                            display_last4 = None
+                                        display_last4 = last4_val
                                     else:
                                         display_network = title or (pm_type.upper() if pm_type else "Payment method")
-                                        display_last4 = None
+                                        display_last4 = last4_val
+
                                     await user_billing_dal.upsert_yk_payment_method(
                                         session,
                                         user_id=user_id,
