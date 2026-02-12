@@ -59,6 +59,7 @@ async def process_successful_payment(session: AsyncSession, bot: Bot,
         return False
 
     db_user = None
+    payment_before_update = None
     try:
         user_id = int(user_id_str)
         subscription_months = float(subscription_months_str or 0)
@@ -213,7 +214,6 @@ async def process_successful_payment(session: AsyncSession, bot: Bot,
                 f"Missing provider payment id in successful YooKassa webhook for payment {payment_db_id}"
             )
 
-        payment_before_update = None
         if payment_db_id is not None:
             payment_before_update = await payment_dal.get_payment_by_db_id(
                 session,
@@ -227,17 +227,38 @@ async def process_successful_payment(session: AsyncSession, bot: Bot,
                 )
                 return True
 
-        marked = await payment_dal.mark_provider_payment_succeeded_once(
+        claimed_for_processing = await payment_dal.mark_provider_payment_processing_once(
             session,
             payment_db_id,
             provider_payment_id,
+            expected_status_prefix="pending",
         )
-        if not marked:
-            logging.info(
-                "YooKassa webhook: payment %s already processed atomically",
+        if not claimed_for_processing:
+            payment_after_claim = await payment_dal.get_payment_by_db_id(
+                session,
                 payment_db_id,
             )
-            return True
+            if payment_after_claim and payment_after_claim.status == "succeeded":
+                logging.info(
+                    "YooKassa webhook ignored: payment %s already succeeded after claim attempt",
+                    payment_db_id,
+                )
+                return True
+
+            # Another transaction is processing this payment now.
+            if payment_after_claim and payment_after_claim.status == "processing":
+                logging.info(
+                    "YooKassa webhook: payment %s is already being processed by another worker",
+                    payment_db_id,
+                )
+                return False
+
+            logging.warning(
+                "YooKassa webhook: payment %s cannot be claimed for processing (status=%s)",
+                payment_db_id,
+                payment_after_claim.status if payment_after_claim else None,
+            )
+            return False
 
         should_send_lknpd_receipt = bool(
             lknpd_service
@@ -295,25 +316,58 @@ async def process_successful_payment(session: AsyncSession, bot: Bot,
                     logging.exception("Failed to persist multi-card YooKassa method from webhook")
         except Exception:
             logging.exception("Failed to persist YooKassa payment method from webhook")
+
         months_for_activation = int(subscription_months) if sale_mode != "traffic" else 0
-        activation_details = await subscription_service.activate_subscription(
-            session,
-            user_id,
-            months_for_activation,
-            payment_value,
-            payment_db_id,
-            promo_code_id_from_payment=promo_code_id,
-            provider="yookassa",
-            sale_mode=sale_mode,
-            traffic_gb=traffic_amount_gb if sale_mode == "traffic" else None,
-        )
+        try:
+            activation_details = await subscription_service.activate_subscription(
+                session,
+                user_id,
+                months_for_activation,
+                payment_value,
+                payment_db_id,
+                promo_code_id_from_payment=promo_code_id,
+                provider="yookassa",
+                sale_mode=sale_mode,
+                traffic_gb=traffic_amount_gb if sale_mode == "traffic" else None,
+            )
+        except Exception:
+            previous_status = payment_before_update.status if payment_before_update else "pending_yookassa"
+            await payment_dal.rollback_provider_payment_processing(
+                session,
+                payment_db_id,
+                rollback_status=previous_status,
+                provider_payment_id=provider_payment_id,
+            )
+            logging.exception(
+                "Failed to activate subscription for payment %s; rolled back payment status for retry",
+                payment_db_id,
+            )
+            return False
 
         if not activation_details or not activation_details.get('end_date'):
             logging.error(
                 f"Failed to activate subscription for user {user_id} after payment {yk_payment_id_from_hook}"
             )
-            raise Exception(
-                f"Subscription Error: Failed to activate for user {user_id}")
+            previous_status = payment_before_update.status if payment_before_update else "pending_yookassa"
+            await payment_dal.rollback_provider_payment_processing(
+                session,
+                payment_db_id,
+                rollback_status=previous_status,
+                provider_payment_id=provider_payment_id,
+            )
+            return False
+
+        marked = await payment_dal.mark_provider_payment_succeeded_once(
+            session,
+            payment_db_id,
+            provider_payment_id,
+        )
+        if not marked:
+            logging.warning(
+                "YooKassa webhook: payment %s could not be atomically marked succeeded after activation",
+                payment_db_id,
+            )
+            return False
 
         base_subscription_end_date = activation_details['end_date']
         final_end_date_for_user = base_subscription_end_date

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from config.settings import Settings
 
 
+import os
 _BASELINE_REVISION = "0001_initial_schema"
 
 
