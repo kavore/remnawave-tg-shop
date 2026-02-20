@@ -41,12 +41,22 @@ async def build_and_start_web_app(
     setup_application(app, dp, bot=bot)
 
     telegram_uses_webhook_mode = bool(settings.WEBHOOK_BASE_URL)
+    telegram_webhook_secret = (settings.TELEGRAM_WEBHOOK_SECRET or "").strip() or None
 
     if telegram_uses_webhook_mode:
-        telegram_webhook_path = f"/{settings.BOT_TOKEN}"
-        app.router.add_post(telegram_webhook_path, SimpleRequestHandler(dispatcher=dp, bot=bot))
+        telegram_webhook_path = settings.telegram_webhook_path
+        app.router.add_post(
+            telegram_webhook_path,
+            SimpleRequestHandler(
+                dispatcher=dp,
+                bot=bot,
+                secret_token=telegram_webhook_secret,
+            ),
+        )
         logging.info(
-            f"Telegram webhook route configured at: [POST] {telegram_webhook_path} (relative to base URL)"
+            "Telegram webhook route configured at: [POST] %s (secret_token=%s)",
+            telegram_webhook_path,
+            "set" if telegram_webhook_secret else "not_set",
         )
 
     from bot.handlers.user.payment import yookassa_webhook_route
@@ -59,7 +69,7 @@ async def build_and_start_web_app(
     cp_path = settings.cryptopay_webhook_path
     if cp_path.startswith("/"):
         app.router.add_post(cp_path, cryptopay_webhook_route)
-        logging.info(f"CryptoPay webhook route configured at: [POST] {cp_path}")
+        logging.info("CryptoPay webhook route configured at: [POST] %s", cp_path)
 
     fk_path = settings.freekassa_webhook_path
     if fk_path.startswith("/"):

@@ -1,3 +1,4 @@
+import logging
 from aiogram import Router, F, types
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,8 +27,8 @@ async def payment_methods_manage(callback: types.CallbackQuery, settings: Settin
         try:
             _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
             await callback.answer(_("error_service_unavailable"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
         return
     _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
 
@@ -67,8 +68,8 @@ async def payment_methods_manage(callback: types.CallbackQuery, settings: Settin
     await callback.message.edit_text(text, reply_markup=get_payment_methods_list_keyboard(cards, 0, current_lang, i18n))
     try:
         await callback.answer()
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
 
 
 @router.callback_query(F.data == "pm:bind")
@@ -79,8 +80,8 @@ async def payment_method_bind(callback: types.CallbackQuery, settings: Settings,
         try:
             _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
             await callback.answer(_("error_service_unavailable"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
         return
     _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
 
@@ -101,8 +102,8 @@ async def payment_method_bind(callback: types.CallbackQuery, settings: Settings,
     await callback.message.edit_text(_("payment_methods_title"), reply_markup=get_bind_url_keyboard(resp["confirmation_url"], current_lang, i18n))
     try:
         await callback.answer()
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
 
 
 @router.callback_query(F.data.startswith("pm:delete_confirm"))
@@ -113,8 +114,8 @@ async def payment_method_delete_confirm(callback: types.CallbackQuery, settings:
         try:
             _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
             await callback.answer(_("error_service_unavailable"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
         return
     _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
     parts = callback.data.split(":", 2)
@@ -122,8 +123,8 @@ async def payment_method_delete_confirm(callback: types.CallbackQuery, settings:
     await callback.message.edit_text(_("payment_method_delete_confirm"), reply_markup=get_payment_method_delete_confirm_keyboard(pm_id, current_lang, i18n))
     try:
         await callback.answer()
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
 
 
 @router.callback_query(F.data.startswith("pm:delete"))
@@ -134,8 +135,8 @@ async def payment_method_delete(callback: types.CallbackQuery, settings: Setting
         try:
             _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
             await callback.answer(_("error_service_unavailable"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
         return
     _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
     parts = callback.data.split(":", 2)
@@ -156,8 +157,8 @@ async def payment_method_delete(callback: types.CallbackQuery, settings: Setting
         try:
             legacy_deleted = await user_billing_dal.delete_yk_payment_method(session, callback.from_user.id)
             deleted = deleted or legacy_deleted
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
         await session.commit()
 
         methods = await list_user_payment_methods(session, callback.from_user.id)
@@ -189,15 +190,15 @@ async def payment_method_delete(callback: types.CallbackQuery, settings: Setting
         await callback.message.edit_text(f"{msg}\n\n{text}", reply_markup=get_payment_methods_list_keyboard(cards, 0, current_lang, i18n))
         try:
             await callback.answer()
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
         return
     except Exception:
         await session.rollback()
         try:
             await callback.answer(_("error_try_again"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
 
 
 @router.callback_query(F.data.startswith("pm:view"))
@@ -208,8 +209,8 @@ async def payment_method_view(callback: types.CallbackQuery, settings: Settings,
         try:
             _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
             await callback.answer(_("error_service_unavailable"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
         return
     _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
 
@@ -262,14 +263,14 @@ async def payment_method_view(callback: types.CallbackQuery, settings: Settings,
             lp = result.scalar_one_or_none()
             if lp and lp.created_at:
                 last_tx = lp.created_at.strftime('%Y-%m-%d')
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
         details = f"{title}\n{_('payment_method_added_at', date=added_at)}\n{_('payment_method_last_tx', date=last_tx)}"
         await callback.message.edit_text(details, reply_markup=get_payment_method_details_keyboard(str(sel.method_id), current_lang, i18n))
         try:
             await callback.answer()
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
         return
 
     added_at = billing.created_at.strftime('%Y-%m-%d') if getattr(billing, 'created_at', None) else "—"
@@ -289,8 +290,8 @@ async def payment_method_view(callback: types.CallbackQuery, settings: Settings,
         last_payment = result.scalar_one_or_none()
         if last_payment and last_payment.created_at:
             last_tx = last_payment.created_at.strftime('%Y-%m-%d')
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
 
     def _is_yoomoney_network(network: Optional[str]) -> bool:
         s = (network or "").lower()
@@ -317,8 +318,8 @@ async def payment_method_view(callback: types.CallbackQuery, settings: Settings,
     await callback.message.edit_text(details, reply_markup=get_payment_method_details_keyboard(billing.yookassa_payment_method_id, current_lang, i18n))
     try:
         await callback.answer()
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
 
 
 @router.callback_query(F.data.startswith("pm:history"))
@@ -329,8 +330,8 @@ async def payment_method_history(callback: types.CallbackQuery, settings: Settin
         try:
             _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
             await callback.answer(_("error_service_unavailable"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
         return
     _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
 
@@ -371,8 +372,8 @@ async def payment_method_history(callback: types.CallbackQuery, settings: Settin
                     if pm.get("id") == selected_pm_provider_id:
                         filtered.append(p)
                         continue
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
         user_payments = filtered
 
     if not user_payments:
@@ -459,6 +460,6 @@ async def payment_methods_list(callback: types.CallbackQuery, settings: Settings
     await callback.message.edit_text(text, reply_markup=get_payment_methods_list_keyboard(cards, page, current_lang, i18n))
     try:
         await callback.answer()
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/user/subscription/payment_methods.py: %s", exc)
 

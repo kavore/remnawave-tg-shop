@@ -58,52 +58,48 @@ async def on_startup_configured(dispatcher: Dispatcher):
 
     telegram_webhook_url_to_set = settings.WEBHOOK_BASE_URL
     if telegram_webhook_url_to_set:
-        full_telegram_webhook_url = (
-            f"{str(telegram_webhook_url_to_set).rstrip('/')}/{settings.BOT_TOKEN}"
-        )
+        full_telegram_webhook_url = settings.telegram_full_webhook_url
+        if not full_telegram_webhook_url:
+            logging.error(
+                "STARTUP: Telegram webhook URL could not be built (WEBHOOK_BASE_URL missing)."
+            )
+            raise SystemExit("WEBHOOK_BASE_URL is required. Polling mode is disabled.")
 
         logging.info(
-            f"STARTUP: Attempting to set Telegram webhook to: {full_telegram_webhook_url if full_telegram_webhook_url != 'ERROR_URL_TOKEN_DETECTED' else 'HIDDEN DUE TO TOKEN'}"
+            "STARTUP: Attempting to set Telegram webhook (path=%s)",
+            settings.telegram_webhook_path,
         )
 
-        if full_telegram_webhook_url != "ERROR_URL_TOKEN_DETECTED":
-            try:
-                current_webhook_info = await bot.get_webhook_info()
-                logging.info(
-                    f"STARTUP: Current Telegram webhook info BEFORE setting: {current_webhook_info.model_dump_json(exclude_none=True, indent=2)}"
-                )
+        try:
+            current_webhook_info = await bot.get_webhook_info()
+            if current_webhook_info.url:
+                logging.info("STARTUP: Telegram webhook already set (non-empty URL).")
+            else:
+                logging.info("STARTUP: Telegram webhook currently empty (will set).")
 
-                set_success = await bot.set_webhook(
-                    url=full_telegram_webhook_url,
-                    drop_pending_updates=True,
-                    allowed_updates=dispatcher.resolve_used_update_types(),
-                )
-                if set_success:
-                    logging.info(
-                        f"STARTUP: bot.set_webhook to {full_telegram_webhook_url} returned SUCCESS (True)."
-                    )
-                else:
-                    logging.error(
-                        f"STARTUP: bot.set_webhook to {full_telegram_webhook_url} returned FAILURE (False)."
-                    )
+            telegram_webhook_secret = (settings.TELEGRAM_WEBHOOK_SECRET or "").strip() or None
+            set_success = await bot.set_webhook(
+                url=full_telegram_webhook_url,
+                drop_pending_updates=True,
+                allowed_updates=dispatcher.resolve_used_update_types(),
+                secret_token=telegram_webhook_secret,
+            )
+            if set_success:
+                logging.info("STARTUP: bot.set_webhook returned SUCCESS (True).")
+            else:
+                logging.error("STARTUP: bot.set_webhook returned FAILURE (False).")
 
-                new_webhook_info = await bot.get_webhook_info()
-                logging.info(
-                    f"STARTUP: Telegram Webhook info AFTER setting: {new_webhook_info.model_dump_json(exclude_none=True, indent=2)}"
-                )
-                if not new_webhook_info.url:
-                    logging.error(
-                        "STARTUP: CRITICAL - Telegram Webhook URL is EMPTY after set attempt. Check bot token and URL validity."
-                    )
-
-            except Exception as e_setwebhook:
+            new_webhook_info = await bot.get_webhook_info()
+            if not new_webhook_info.url:
                 logging.error(
-                    f"STARTUP: EXCEPTION during set/get Telegram webhook: {e_setwebhook}",
-                    exc_info=True,
+                    "STARTUP: CRITICAL - Telegram Webhook URL is EMPTY after set attempt. Check bot token and URL validity."
                 )
-        else:
+
+        except Exception as e_setwebhook:
             logging.error(
-                "STARTUP: Skipped setting Telegram webhook due to security or configuration error."
+                "STARTUP: EXCEPTION during set/get Telegram webhook: %s",
+                e_setwebhook,
+                exc_info=True,
             )
     else:
         logging.error(
@@ -148,6 +144,18 @@ async def on_startup_configured(dispatcher: Dispatcher):
         logging.info("STARTUP: Message queue manager initialized")
     except Exception as e:
         logging.error(f"STARTUP: Failed to initialize message queue manager: {e}", exc_info=True)
+
+    # Initialize promo discount expiration worker
+    try:
+        promo_code_service: Optional[PromoCodeService] = dispatcher.get("promo_code_service")
+        if promo_code_service:
+            await promo_code_service.setup_discount_expiration_worker(async_session_factory)
+            logging.info("STARTUP: Promo discount expiration worker initialized")
+    except Exception as e:
+        logging.error(
+            f"STARTUP: Failed to initialize promo discount expiration worker: {e}",
+            exc_info=True,
+        )
 
     # Automatic sync on startup
     try:

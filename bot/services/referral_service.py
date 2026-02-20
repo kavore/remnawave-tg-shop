@@ -32,6 +32,13 @@ class ReferralService:
             current_payment_db_id: Optional[int] = None,
             skip_if_active_before_payment: bool = True) -> Dict[str, Any]:
 
+        if not getattr(self.settings, "REFERRAL_ENABLED", True):
+            return {
+                "referee_bonus_applied_days": None,
+                "referee_new_end_date": None,
+                "inviter_bonus_applied_flag": False,
+            }
+
         referee_final_end_date: Optional[datetime] = None
         referee_bonus_applied_days: Optional[int] = None
         inviter_bonus_successfully_applied = False
@@ -260,6 +267,9 @@ class ReferralService:
     async def generate_referral_link(self, session: AsyncSession,
                                      bot_username: str,
                                      inviter_user_id: int) -> Optional[str]:
+        if not getattr(self.settings, "REFERRAL_ENABLED", True):
+            return None
+
         try:
             user = await user_dal.get_user_by_id(session, inviter_user_id)
             if not user:

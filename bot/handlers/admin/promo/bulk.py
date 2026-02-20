@@ -1,5 +1,5 @@
 import logging
-import random
+import secrets
 import string
 import csv
 import io
@@ -56,7 +56,7 @@ async def create_bulk_promo_prompt_handler(callback: types.CallbackQuery,
 def generate_unique_promo_code(length: int = 8) -> str:
     """Generate a unique random promo code"""
     characters = string.ascii_uppercase + string.digits
-    return ''.join(random.choice(characters) for _ in range(length))
+    return ''.join(secrets.choice(characters) for _ in range(length))
 
 
 # Step 1: Process quantity

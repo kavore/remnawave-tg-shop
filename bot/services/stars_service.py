@@ -27,11 +27,62 @@ class StarsService:
         self.subscription_service = subscription_service
         self.referral_service = referral_service
 
-    async def create_invoice(self, session: AsyncSession, user_id: int, months: int,
+    def _resolve_base_stars_price(self, months: float, sale_mode: str) -> Optional[int]:
+        stars_price_source = (
+            self.settings.stars_traffic_packages
+            if sale_mode == "traffic"
+            else self.settings.stars_subscription_options
+        )
+
+        if sale_mode != "traffic":
+            months_key = int(months) if float(months).is_integer() else months
+            base_price = stars_price_source.get(months_key)
+            if base_price is not None:
+                return base_price
+
+            if float(months).is_integer():
+                return stars_price_source.get(float(months_key))
+
+            return None
+
+        base_price = stars_price_source.get(months)
+        if base_price is not None:
+            return base_price
+
+        for package_size, package_price in stars_price_source.items():
+            if math.isclose(float(package_size), float(months), rel_tol=0.0, abs_tol=1e-9):
+                return package_price
+
+        return None
+
+    async def create_invoice(self, session: AsyncSession, user_id: int, months: float,
                              stars_price: int, description: str, sale_mode: str = "subscription",
                              promo_code_service=None) -> Optional[int]:
-        # Apply active discount if exists (Stars use ceiling rounding)
-        original_stars_price = stars_price
+        # Always resolve base price server-side and reject unknown packages.
+        resolved_base_price = self._resolve_base_stars_price(months, sale_mode)
+        if resolved_base_price is None:
+            logging.warning(
+                "Stars invoice rejected: base price not found for sale_mode=%s months=%s.",
+                sale_mode,
+                months,
+            )
+            return None
+
+        original_stars_price = int(resolved_base_price)
+
+        # Detect callback tampering (or stale callback payload) and prefer server-side price.
+        if int(stars_price) != original_stars_price:
+            logging.warning(
+                "Stars callback price mismatch for user %s: callback=%s, resolved=%s, sale_mode=%s, months=%s",
+                user_id,
+                stars_price,
+                original_stars_price,
+                sale_mode,
+                months,
+            )
+
+        # Invoice amount starts from the base price and discount is applied once.
+        stars_price = original_stars_price
         discount_amount_stars = None
         promo_code_id = None
 
@@ -41,14 +92,16 @@ class StarsService:
 
             # Apply discount and round up using ceiling
             final_price_float, discount_float, promo_code_id = await apply_discount_to_payment(
-                session, user_id, float(stars_price), promo_code_service
+                session, user_id, float(original_stars_price), promo_code_service
             )
             if discount_float:
-                # Apply ceiling rounding for fractional Stars amounts
                 stars_price = math.ceil(final_price_float)
                 discount_amount_stars = original_stars_price - stars_price
                 logging.info(
-                    f"Stars discount applied: {original_stars_price} -> {final_price_float:.2f} -> {stars_price} (ceiling)"
+                    "Stars discount applied: %s -> %.2f -> %s (ceiling)",
+                    original_stars_price,
+                    final_price_float,
+                    stars_price,
                 )
 
         payment_record_data = {
@@ -81,7 +134,7 @@ class StarsService:
                 title=description,
                 description=description,
                 payload=payload,
-                provider_token="",
+                provider_token=self.settings.STARS_PROVIDER_TOKEN or "",
                 currency="XTR",
                 prices=prices,
             )
@@ -102,45 +155,56 @@ class StarsService:
         payment_record = await payment_dal.get_payment_by_db_id(session, payment_db_id)
         promo_code_id_from_payment = payment_record.promo_code_id if payment_record else None
 
+        activation_details = None
+        referral_bonus = None
         try:
-            await payment_dal.update_provider_payment_and_status(
-                session, payment_db_id,
-                message.successful_payment.provider_payment_charge_id,
-                "succeeded")
+            provider_payment_id = str(
+                message.successful_payment.provider_payment_charge_id
+                or f"stars:{payment_db_id}"
+            )
+            marked = await payment_dal.mark_provider_payment_succeeded_once(
+                session,
+                payment_db_id,
+                provider_payment_id,
+            )
+            if not marked:
+                logging.info(
+                    "Stars payment %s already processed atomically",
+                    payment_db_id,
+                )
+                return
+
+            activation_details = await self.subscription_service.activate_subscription(
+                session,
+                message.from_user.id,
+                int(months) if sale_mode != "traffic" else 0,
+                float(stars_amount),
+                payment_db_id,
+                promo_code_id_from_payment=promo_code_id_from_payment,
+                provider="telegram_stars",
+                sale_mode=sale_mode,
+                traffic_gb=months if sale_mode == "traffic" else None,
+            )
+            if not activation_details or not activation_details.get("end_date"):
+                raise RuntimeError(
+                    f"Failed to activate subscription after stars payment {payment_db_id}"
+                )
+
+            if sale_mode != "traffic":
+                referral_bonus = await self.referral_service.apply_referral_bonuses_for_payment(
+                    session,
+                    message.from_user.id,
+                    int(months) or 1,
+                    current_payment_db_id=payment_db_id,
+                    skip_if_active_before_payment=False,
+                )
             await session.commit()
         except Exception as e_upd:
             await session.rollback()
             logging.error(
-                f"Failed to update stars payment record {payment_db_id}: {e_upd}",
+                f"Failed to process stars payment record {payment_db_id}: {e_upd}",
                 exc_info=True)
             return
-
-        activation_details = await self.subscription_service.activate_subscription(
-            session,
-            message.from_user.id,
-            int(months) if sale_mode != "traffic" else 0,
-            float(stars_amount),
-            payment_db_id,
-            promo_code_id_from_payment=promo_code_id_from_payment,
-            provider="telegram_stars",
-            sale_mode=sale_mode,
-            traffic_gb=months if sale_mode == "traffic" else None,
-        )
-        if not activation_details or not activation_details.get("end_date"):
-            logging.error(
-                f"Failed to activate subscription after stars payment for user {message.from_user.id}")
-            return
-
-        referral_bonus = None
-        if sale_mode != "traffic":
-            referral_bonus = await self.referral_service.apply_referral_bonuses_for_payment(
-                session,
-                message.from_user.id,
-                int(months) or 1,
-                current_payment_db_id=payment_db_id,
-                skip_if_active_before_payment=False,
-            )
-        await session.commit()
 
         applied_days = referral_bonus.get("referee_bonus_applied_days") if referral_bonus else None
         final_end = referral_bonus.get("referee_new_end_date") if referral_bonus else None

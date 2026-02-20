@@ -32,6 +32,9 @@ class ChannelSubscriptionMiddleware(BaseMiddleware):
         event: Update,
         data: Dict[str, Any],
     ) -> Any:
+        if not self.settings.REQUIRED_CHANNEL_SUBSCRIBE_TO_USE:
+            return await handler(event, data)
+
         required_channel_id = self.settings.REQUIRED_CHANNEL_ID
         if not required_channel_id:
             return await handler(event, data)
@@ -124,8 +127,8 @@ class ChannelSubscriptionMiddleware(BaseMiddleware):
     ) -> None:
         try:
             await callback.answer(prompt_text, show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Failed to answer callback for channel gate prompt: %s", exc)
 
         if callback.message:
             try:

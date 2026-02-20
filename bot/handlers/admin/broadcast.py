@@ -171,8 +171,8 @@ async def change_broadcast_target_handler(
                 current_lang, i18n, target=new_target
             ),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/admin/broadcast.py: %s", exc)
     await callback.answer()
 
 

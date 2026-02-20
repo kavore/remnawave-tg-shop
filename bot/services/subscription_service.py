@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any, List, Tuple
 from aiogram import Bot
 from bot.middlewares.i18n import JsonI18n
 
-from db.dal import user_dal, subscription_dal, promo_code_dal, user_billing_dal
+from db.dal import user_dal, subscription_dal, promo_code_dal, user_billing_dal, payment_dal
 from bot.utils.date_utils import add_months
 from bot.utils.config_link import prepare_config_links
 from db.models import User, Subscription
@@ -1007,15 +1007,30 @@ class SubscriptionService:
             logging.error(f"Auto-renew price missing for {months} months")
             return False
 
+        payment_description = f"Auto-renewal for {months} months"
+        payment_record = await payment_dal.create_payment_record(
+            session,
+            {
+                "user_id": sub.user_id,
+                "amount": float(amount),
+                "currency": "RUB",
+                "status": "pending_yookassa",
+                "description": payment_description,
+                "subscription_duration_months": int(months),
+                "provider": "yookassa",
+            },
+        )
+
         metadata = {
             "user_id": str(sub.user_id),
             "auto_renew_for_subscription_id": str(sub.subscription_id),
             "subscription_months": str(months),
+            "payment_db_id": str(payment_record.payment_id),
         }
         resp = await yk.create_payment(
             amount=float(amount),
             currency="RUB",
-            description=f"Auto-renewal for {months} months",
+            description=payment_description,
             metadata=metadata,
             payment_method_id=default_pm.provider_payment_method_id,
             save_payment_method=False,
@@ -1024,6 +1039,14 @@ class SubscriptionService:
         if not resp or resp.get("status") not in {"pending", "waiting_for_capture", "succeeded"}:
             logging.error(f"Auto-renew create_payment failed: {resp}")
             return False
+        provider_payment_id = resp.get("id")
+        if provider_payment_id:
+            await payment_dal.update_provider_payment_and_status(
+                session,
+                payment_db_id=payment_record.payment_id,
+                provider_payment_id=provider_payment_id,
+                new_status="pending_yookassa",
+            )
         logging.info(f"Auto-renew initiated for user {sub.user_id} payment_id={resp.get('id')}")
         return True
 

@@ -1,6 +1,6 @@
 import logging
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, ValidationError, computed_field, field_validator
+from pydantic import Field, ValidationError, computed_field, field_validator, model_validator
 from typing import Optional, List, Dict, Any
 
 
@@ -18,11 +18,14 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = Field(default="vpn_shop_db")
 
     DEFAULT_LANGUAGE: str = Field(default="ru")
-    DEFAULT_CURRENCY_SYMBOL: str = Field(default="RUB")
 
     SUPPORT_LINK: Optional[str] = Field(default=None)
     SERVER_STATUS_URL: Optional[str] = Field(default=None)
     TERMS_OF_SERVICE_URL: Optional[str] = Field(default=None)
+    REQUIRED_CHANNEL_SUBSCRIBE_TO_USE: bool = Field(
+        default=False,
+        description="Require users to subscribe to REQUIRED_CHANNEL_ID before using the bot",
+    )
     REQUIRED_CHANNEL_ID: Optional[int] = Field(
         default=None,
         description="Telegram channel ID the user must join to access the bot")
@@ -73,6 +76,14 @@ class Settings(BaseSettings):
     )
 
     WEBHOOK_BASE_URL: Optional[str] = None
+    TELEGRAM_WEBHOOK_PATH: str = Field(
+        default="/webhook/telegram",
+        description="Relative path for Telegram webhook endpoint",
+    )
+    TELEGRAM_WEBHOOK_SECRET: Optional[str] = Field(
+        default=None,
+        description="Secret token for Telegram webhook header validation",
+    )
 
     CRYPTOPAY_TOKEN: Optional[str] = None
     CRYPTOPAY_NETWORK: str = Field(default="mainnet")
@@ -110,6 +121,10 @@ class Settings(BaseSettings):
 
     YOOKASSA_ENABLED: bool = Field(default=True)
     STARS_ENABLED: bool = Field(default=True)
+    STARS_PROVIDER_TOKEN: Optional[str] = Field(
+        default="",
+        description="Provider token for Telegram invoices. For Stars (XTR) should stay empty.",
+    )
     PAYMENT_METHODS_ORDER: Optional[str] = Field(
         default=None,
         description="Comma-separated list of payment methods to show (e.g., severpay,freekassa,yookassa,platega,stars,cryptopay)",
@@ -167,6 +182,10 @@ class Settings(BaseSettings):
     REFERRAL_ONE_BONUS_PER_REFEREE: bool = Field(
         default=True,
         description="When true, referral bonuses (for inviter and referee) are applied only once per invited user - on their first successful payment."
+    )
+    REFERRAL_ENABLED: bool = Field(
+        default=True,
+        description="Enable referral links, referral menu and referral bonuses",
     )
     LEGACY_REFS: bool = Field(
         default=True,
@@ -277,6 +296,22 @@ class Settings(BaseSettings):
             cleaned = self.USER_EXTERNAL_SQUAD_UUID.strip()
             if cleaned:
                 return cleaned
+        return None
+
+    @computed_field
+    @property
+    def telegram_webhook_path(self) -> str:
+        path = (self.TELEGRAM_WEBHOOK_PATH or "").strip() or "/webhook/telegram"
+        if not path.startswith("/"):
+            path = f"/{path}"
+        return path
+
+    @computed_field
+    @property
+    def telegram_full_webhook_url(self) -> Optional[str]:
+        base = self.WEBHOOK_BASE_URL
+        if base:
+            return f"{base.rstrip('/')}{self.telegram_webhook_path}"
         return None
 
     @computed_field
@@ -520,7 +555,24 @@ class Settings(BaseSettings):
     )
     LOG_CHAT_ID: Optional[int] = Field(default=None, description="Telegram chat/group ID for sending notifications")
     LOG_THREAD_ID: Optional[int] = Field(default=None, description="Thread ID for supergroup messages (optional)")
+    LOG_STORE_MESSAGE_CONTENT: bool = Field(
+        default=False,
+        description="Store message/callback content in message logs",
+    )
+    LOG_STORE_RAW_UPDATES: bool = Field(
+        default=False,
+        description="Store raw update previews in message logs",
+    )
+    LOG_EXPORT_INCLUDE_SENSITIVE: bool = Field(
+        default=False,
+        description="Include content/raw update fields in admin CSV export",
+    )
     
+    LOG_ADMIN_HIDE: bool = Field(
+        default=False,
+        description="Hide admin-generated events from admin logs UI and CSV export",
+    )
+
     @field_validator('LOG_LEVEL', mode='before')
     @classmethod
     def normalize_log_level(cls, v):
@@ -530,13 +582,39 @@ class Settings(BaseSettings):
             return "INFO"
         return v
 
-    @field_validator('LOG_CHAT_ID', 'LOG_THREAD_ID', mode='before')
+    @model_validator(mode='before')
     @classmethod
-    def validate_optional_int_fields(cls, v):
-        """Convert empty strings to None for optional integer fields"""
-        if isinstance(v, str) and v.strip() == '':
-            return None
-        return v
+    def drop_comment_placeholder_values(cls, values: Any):
+        """
+        dotenv parses lines like `KEY=  # comment` as `"# comment"`.
+        Treat such values as unset so defaults/optionals work as expected.
+        """
+        if not isinstance(values, dict):
+            return values
+
+        sanitized: Dict[str, Any] = {}
+        for key, value in values.items():
+            if isinstance(value, str):
+                trimmed = value.strip()
+                if trimmed == "#" or trimmed.startswith("# "):
+                    continue
+            sanitized[key] = value
+        return sanitized
+
+    @field_validator(
+        'TELEGRAM_WEBHOOK_PATH',
+        mode='before',
+    )
+    @classmethod
+    def normalize_webhook_path(cls, v):
+        if not isinstance(v, str):
+            return "/webhook/telegram"
+        cleaned = v.strip()
+        if not cleaned:
+            return "/webhook/telegram"
+        if not cleaned.startswith("/"):
+            cleaned = f"/{cleaned}"
+        return cleaned
 
     @field_validator(
         'REQUIRED_CHANNEL_LINK',
@@ -544,6 +622,8 @@ class Settings(BaseSettings):
         'PLATEGA_FAILED_URL',
         'SEVERPAY_RETURN_URL',
         'CRYPT4_REDIRECT_URL',
+        'TELEGRAM_WEBHOOK_SECRET',
+        'PANEL_WEBHOOK_SECRET',
         mode='before',
     )
     @classmethod
@@ -552,7 +632,16 @@ class Settings(BaseSettings):
             return None
         return v
     
-    @field_validator('USER_HWID_DEVICE_LIMIT', 'SEVERPAY_MID', 'SEVERPAY_LIFETIME_MINUTES', mode='before')
+    @field_validator(
+        'REQUIRED_CHANNEL_ID',
+        'FREEKASSA_PAYMENT_METHOD_ID',
+        'USER_HWID_DEVICE_LIMIT',
+        'SEVERPAY_MID',
+        'SEVERPAY_LIFETIME_MINUTES',
+        'LOG_CHAT_ID',
+        'LOG_THREAD_ID',
+        mode='before'
+    )
     @classmethod
     def validate_optional_int(cls, v):
         if isinstance(v, str):
@@ -567,6 +656,10 @@ class Settings(BaseSettings):
     LOG_PROMO_ACTIVATIONS: bool = Field(default=True, description="Send notifications for promo code activations")
     LOG_TRIAL_ACTIVATIONS: bool = Field(default=True, description="Send notifications for trial activations")
     LOG_SUSPICIOUS_ACTIVITY: bool = Field(default=True, description="Send notifications for suspicious promo attempts")
+    DISCOUNT_PROMO_PAYMENT_TIMEOUT_MINUTES: int = Field(
+        default=10,
+        description="How long a discount promo reservation is kept before user payment",
+    )
 
     model_config = SettingsConfigDict(env_file='.env',
                                       env_file_encoding='utf-8',
@@ -590,6 +683,11 @@ def get_settings() -> Settings:
             if not _settings_instance.PANEL_API_URL:
                 logging.warning(
                     "CRITICAL: PANEL_API_URL is not set. Panel integration will not work."
+                )
+            if _settings_instance.WEBHOOK_BASE_URL and not _settings_instance.TELEGRAM_WEBHOOK_SECRET:
+                logging.warning(
+                    "WARNING: TELEGRAM_WEBHOOK_SECRET is empty while webhook mode is enabled. "
+                    "Set TELEGRAM_WEBHOOK_SECRET to validate X-Telegram-Bot-Api-Secret-Token header."
                 )
             if not _settings_instance.YOOKASSA_SHOP_ID or not _settings_instance.YOOKASSA_SECRET_KEY:
                 logging.warning(

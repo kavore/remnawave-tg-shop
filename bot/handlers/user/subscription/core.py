@@ -57,13 +57,13 @@ async def display_subscription_options(
         if isinstance(event, types.CallbackQuery):
             try:
                 await event.answer(err_msg, show_alert=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
         elif isinstance(event, types.Message):
             await event.answer(err_msg)
         return
 
-    currency_symbol_val = settings.DEFAULT_CURRENCY_SYMBOL
+    currency_symbol_val = "RUB"
     traffic_packages = getattr(settings, "traffic_packages", {}) or {}
     stars_traffic_packages = getattr(settings, "stars_traffic_packages", {}) or {}
     traffic_mode = bool(getattr(settings, "traffic_sale_mode", False) or stars_traffic_packages)
@@ -118,8 +118,8 @@ async def display_subscription_options(
         if isinstance(event, types.CallbackQuery):
             try:
                 await event.answer(get_text("error_occurred_try_again"), show_alert=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
         return
 
     if isinstance(event, types.CallbackQuery):
@@ -129,8 +129,8 @@ async def display_subscription_options(
             await target_message_obj.answer(text_content, reply_markup=reply_markup)
         try:
             await event.answer()
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
     else:
         await target_message_obj.answer(text_content, reply_markup=reply_markup)
 
@@ -186,8 +186,8 @@ async def my_subscription_command_handler(
         if isinstance(event, types.CallbackQuery):
             try:
                 await event.answer()
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
             try:
                 await event.message.edit_text(text, reply_markup=kb)
             except Exception:
@@ -209,8 +209,8 @@ async def my_subscription_command_handler(
             if isinstance(val, (int, float)):
                 val_gb = float(val) / (2**30)
                 return f"{val_gb:.2f} GB"
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
         return str(val)
 
     if traffic_mode:
@@ -222,8 +222,8 @@ async def my_subscription_command_handler(
             used_val = active.get("traffic_used_bytes") or 0
             remaining_val = max(0, float(limit_val) - float(used_val))
             remaining_display = _fmt_gb(remaining_val)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
         text = get_text(
             "my_traffic_details",
             status=active.get("status_from_panel", get_text("status_active")).capitalize(),
@@ -342,15 +342,15 @@ async def my_subscription_command_handler(
 
         if prepend_rows:
             kb = prepend_rows + kb
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
     markup = InlineKeyboardMarkup(inline_keyboard=kb)
 
     if isinstance(event, types.CallbackQuery):
         try:
             await event.answer()
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
         try:
             await event.message.edit_text(text, reply_markup=markup, parse_mode="HTML", disable_web_page_preview=True)
         except Exception:
@@ -389,8 +389,8 @@ async def my_devices_command_handler(
         if isinstance(event, types.CallbackQuery):
             try:
                 await event.answer(get_text("my_devices_feature_disabled"), show_alert=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
         else:
             await target.answer(get_text("my_devices_feature_disabled"))
         return
@@ -402,8 +402,8 @@ async def my_devices_command_handler(
         if isinstance(event, types.CallbackQuery):
             try:
                 await event.answer(message, show_alert=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
         else:
             await target.answer(message)
         return
@@ -413,8 +413,8 @@ async def my_devices_command_handler(
         if isinstance(event, types.CallbackQuery):
             try:
                 await event.answer(get_text("no_devices_found"), show_alert=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
         else:
             await target.answer(get_text("no_devices_found"))
         return
@@ -475,8 +475,8 @@ async def my_devices_command_handler(
     if isinstance(event, types.CallbackQuery):
         try:
             await event.answer()
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
         try:
             await event.message.edit_text(text, reply_markup=markup)
         except Exception:
@@ -502,8 +502,8 @@ async def disconnect_device_handler(
     if not settings.MY_DEVICES_SECTION_ENABLED:
         try:
             await callback.answer(get_text("my_devices_feature_disabled"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
         return
 
     try:
@@ -511,8 +511,8 @@ async def disconnect_device_handler(
     except Exception:
         try:
             await callback.answer(get_text("error_try_again"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
         return
 
     active = await subscription_service.get_active_subscription_details(session, callback.from_user.id)
@@ -549,8 +549,8 @@ async def disconnect_device_handler(
     await session.commit()
     try:
         await callback.answer(get_text("device_disconnected"))
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
     await my_devices_command_handler(callback, i18n_data, settings, panel_service, subscription_service, session, bot)
 
 
@@ -576,8 +576,8 @@ async def toggle_autorenew_handler(
     except Exception:
         try:
             await callback.answer(get_text("error_try_again"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
         return
 
     sub = await session.get(Subscription, sub_id)
@@ -592,8 +592,8 @@ async def toggle_autorenew_handler(
         if not has_saved_card:
             try:
                 await callback.answer(get_text("autorenew_enable_requires_card"), show_alert=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
             return
 
     # Show confirmation popup and inline buttons
@@ -604,12 +604,12 @@ async def toggle_autorenew_handler(
     except Exception:
         try:
             await callback.message.answer(confirm_text, reply_markup=kb)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
     try:
         await callback.answer()
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
     return
 
 
@@ -634,8 +634,8 @@ async def confirm_autorenew_handler(
     except Exception:
         try:
             await callback.answer(get_text("error_try_again"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
         return
 
     sub = await session.get(Subscription, sub_id)
@@ -650,20 +650,20 @@ async def confirm_autorenew_handler(
         if not has_saved_card:
             try:
                 await callback.answer(get_text("autorenew_enable_requires_card"), show_alert=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
             try:
                 await my_subscription_command_handler(callback, i18n_data, settings, panel_service, subscription_service, session, bot)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
             return
 
     await subscription_dal.update_subscription(session, sub.subscription_id, {"auto_renew_enabled": enable})
     await session.commit()
     try:
         await callback.answer(get_text("subscription_autorenew_updated"))
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
     await my_subscription_command_handler(callback, i18n_data, settings, panel_service, subscription_service, session, bot)
 
 
@@ -687,21 +687,21 @@ async def autorenew_cancel_from_webhook_button(
     if not sub:
         try:
             await callback.answer(get_text("subscription_not_active"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
         return
     if sub.provider != "yookassa":
         try:
             await callback.answer(get_text("error_try_again"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
         return
     await subscription_dal.update_subscription(session, sub.subscription_id, {"auto_renew_enabled": False})
     await session.commit()
     try:
         await callback.answer(get_text("subscription_autorenew_updated"))
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/user/subscription/core.py: %s", exc)
     await my_subscription_command_handler(callback, i18n_data, settings, panel_service, subscription_service, session, bot)
 
 

@@ -207,7 +207,7 @@ class PromoCodeActivation(Base):
 
 
 class ActiveDiscount(Base):
-    """Tracks pending discount promo codes awaiting payment (permanent until used)"""
+    """Tracks pending discount promo code reservations awaiting payment."""
     __tablename__ = "active_discounts"
 
     user_id = Column(
@@ -222,6 +222,7 @@ class ActiveDiscount(Base):
     )
     discount_percentage = Column(Integer, nullable=False)
     activated_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)
 
     promo_code = relationship("PromoCode")
     user = relationship("User")

@@ -142,7 +142,7 @@ class PlategaService:
 
         http_session = await self._get_session()
         url = f"{self.base_url}/transaction/process"
-        currency_code = (currency or self.settings.DEFAULT_CURRENCY_SYMBOL or "RUB").upper()
+        currency_code = (currency or "RUB").upper()
 
         body: Dict[str, Any] = {
             "paymentMethod": int(self.payment_method),
@@ -201,7 +201,7 @@ class PlategaService:
         transaction_id = str(data.get("id") or data.get("transactionId") or "").strip()
         status = str(data.get("status") or "").upper()
         amount_raw = data.get("amount")
-        currency = data.get("currency") or self.settings.DEFAULT_CURRENCY_SYMBOL or "RUB"
+        currency = data.get("currency") or "RUB"
 
         if not transaction_id or not status:
             logging.error("Platega webhook: missing transaction id or status in payload: %s", data)
@@ -220,27 +220,46 @@ class PlategaService:
             sale_mode = "traffic" if self.settings.traffic_sale_mode else "subscription"
 
             if status == "CONFIRMED":
+                if currency:
+                    provider_currency = str(currency).upper()
+                    expected_currency = str(payment.currency or "").upper()
+                    if expected_currency and expected_currency != provider_currency:
+                        logging.error(
+                            "Platega webhook: currency mismatch for payment %s (expected %s, got %s)",
+                            payment.payment_id,
+                            expected_currency,
+                            provider_currency,
+                        )
+                        return web.Response(status=400, text="currency_mismatch")
+
                 if amount_raw is not None:
                     try:
                         incoming_amount = Decimal(str(amount_raw)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
                         expected_amount = Decimal(str(payment.amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
                         if incoming_amount != expected_amount:
-                            logging.warning(
+                            logging.error(
                                 "Platega webhook: amount mismatch for payment %s (expected %s, got %s)",
                                 payment.payment_id,
                                 expected_amount,
                                 incoming_amount,
                             )
+                            return web.Response(status=400, text="amount_mismatch")
                     except Exception as exc:
-                        logging.warning("Platega webhook: failed to compare amounts for %s: %s", payment.payment_id, exc)
+                        logging.error("Platega webhook: failed to compare amounts for %s: %s", payment.payment_id, exc)
+                        return web.Response(status=400, text="amount_validation_error")
 
                 try:
-                    await payment_dal.update_provider_payment_and_status(
+                    marked = await payment_dal.mark_provider_payment_succeeded_once(
                         session,
                         payment.payment_id,
                         transaction_id,
-                        "succeeded",
                     )
+                    if not marked:
+                        logging.info(
+                            "Platega webhook: payment %s already processed atomically",
+                            payment.payment_id,
+                        )
+                        return web.Response(text="ok")
 
                     activation = await self.subscription_service.activate_subscription(
                         session,
@@ -253,6 +272,10 @@ class PlategaService:
                         sale_mode=sale_mode,
                         traffic_gb=payment_months if sale_mode == "traffic" else None,
                     )
+                    if not activation or not activation.get("end_date"):
+                        raise RuntimeError(
+                            f"Platega webhook: activation failed for payment {payment.payment_id}"
+                        )
 
                     referral_bonus = None
                     if sale_mode != "traffic":
@@ -365,7 +388,7 @@ class PlategaService:
 
                 return web.Response(text="ok")
 
-            if status in {"CANCELED", "CANCELLED", "CHARGEBACKED"}:
+            if status in {"CANCELED", "CANCELLED", "CHARGEBACK", "CHARGEBACKED"}:
                 try:
                     await payment_dal.update_provider_payment_and_status(
                         session,
@@ -384,8 +407,8 @@ class PlategaService:
                 _ = lambda k, **kw: self.i18n.gettext(lang, k, **kw) if self.i18n else k
                 try:
                     await self.bot.send_message(payment.user_id, _("payment_failed"))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug("Platega webhook: failed to send cancellation message to user %s: %s", payment.user_id, exc)
                 return web.Response(text="ok_canceled")
 
             logging.warning("Platega webhook: unhandled status '%s' for transaction %s", status, transaction_id)

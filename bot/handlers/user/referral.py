@@ -43,6 +43,15 @@ async def referral_command_handler(event: Union[types.Message,
 
     _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs)
 
+    if not settings.REFERRAL_ENABLED:
+        await target_message_obj.answer(
+            _("referral_no_bonuses_configured"),
+            reply_markup=get_back_to_main_menu_markup(current_lang, i18n),
+        )
+        if isinstance(event, types.CallbackQuery):
+            await event.answer()
+        return
+
     try:
         bot_info = await bot.get_me()
         bot_username = bot_info.username
@@ -136,6 +145,9 @@ async def referral_action_handler(callback: types.CallbackQuery, settings: Setti
     _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs)
 
     if action == "share_message":
+        if not settings.REFERRAL_ENABLED:
+            await callback.answer(_("referral_no_bonuses_configured"), show_alert=True)
+            return
         try:
             bot_info = await bot.get_me()
             bot_username = bot_info.username

@@ -59,6 +59,29 @@ class PanelApiService:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
+    @staticmethod
+    def _sanitize_payload_for_log(payload: Any) -> Any:
+        if isinstance(payload, dict):
+            redacted: Dict[str, Any] = {}
+            for key, value in payload.items():
+                lowered = str(key).lower()
+                if any(mask_key in lowered for mask_key in (
+                    "token",
+                    "secret",
+                    "password",
+                    "authorization",
+                    "api_key",
+                    "apikey",
+                    "key",
+                )):
+                    redacted[key] = "***"
+                else:
+                    redacted[key] = PanelApiService._sanitize_payload_for_log(value)
+            return redacted
+        if isinstance(payload, list):
+            return [PanelApiService._sanitize_payload_for_log(item) for item in payload]
+        return payload
+
     async def _request(self,
                        method: str,
                        endpoint: str,
@@ -83,8 +106,8 @@ class PanelApiService:
         if current_params:
             try:
                 url_with_params_for_log += "?" + urlencode(current_params)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Failed to encode params for panel API log URL: %s", exc)
 
         json_payload_for_log = kwargs.get('json') if method.upper() in [
             "POST", "PATCH", "PUT"
@@ -92,10 +115,11 @@ class PanelApiService:
         log_prefix = f"Panel API Req: {method.upper()} {url_with_params_for_log}"
         if json_payload_for_log:
             try:
-                payload_str = json.dumps(json_payload_for_log)
+                sanitized_payload = self._sanitize_payload_for_log(json_payload_for_log)
+                payload_str = json.dumps(sanitized_payload)
                 log_prefix += f" | Payload: {payload_str[:300]}{'...' if len(payload_str) > 300 else ''}"
             except Exception:
-                log_prefix += f" | Payload: {str(json_payload_for_log)[:300]}..."
+                log_prefix += " | Payload: <unavailable>"
         try:
             async with aiohttp_session.request(method.upper(),
                                                url_for_request,
@@ -106,7 +130,8 @@ class PanelApiService:
 
                 log_suffix = f"| Status: {response_status}"
 
-                if log_full_response or not (200 <= response_status < 300):
+                should_log_full_body = bool(log_full_response and self.settings.LOG_LEVEL == "DEBUG")
+                if should_log_full_body or not (200 <= response_status < 300):
                     try:
                         parsed_json_for_log = json.loads(response_text)
                         pretty_response_text = json.dumps(parsed_json_for_log,
@@ -404,7 +429,10 @@ class PanelApiService:
             return response
 
         logging.error(
-            f"Failed to create panel user '{username_on_panel}'. Payload: {payload}, Response: {response if not log_response else '(full response logged above)'}"
+            "Failed to create panel user '%s'. Payload: %s, Response: %s",
+            username_on_panel,
+            self._sanitize_payload_for_log(payload),
+            response if not log_response else "(full response logged above)",
         )
         return response
 
@@ -426,7 +454,10 @@ class PanelApiService:
             return full_response.get("response")
 
         logging.error(
-            f"Failed to update user {user_uuid} details on panel. Payload: {update_payload}, Response: {full_response if not log_response else '(logged above)'}"
+            "Failed to update user %s details on panel. Payload: %s, Response: %s",
+            user_uuid,
+            self._sanitize_payload_for_log(update_payload),
+            full_response if not log_response else "(logged above)",
         )
         return None
 

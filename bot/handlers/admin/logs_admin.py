@@ -171,9 +171,17 @@ async def view_all_logs_handler(callback: types.CallbackQuery,
         await callback.answer("Error processing request.", show_alert=True)
         return
 
+    hide_admin_events = bool(settings.LOG_ADMIN_HIDE)
     logs_models = await message_log_dal.get_all_message_logs(
-        session, settings.LOGS_PAGE_SIZE, page_idx * settings.LOGS_PAGE_SIZE)
-    total_logs_count = await message_log_dal.count_all_message_logs(session)
+        session,
+        settings.LOGS_PAGE_SIZE,
+        page_idx * settings.LOGS_PAGE_SIZE,
+        hide_admin_events=hide_admin_events,
+    )
+    total_logs_count = await message_log_dal.count_all_message_logs(
+        session,
+        hide_admin_events=hide_admin_events,
+    )
 
     await _display_formatted_logs(
         target_message=callback.message,
@@ -344,8 +352,12 @@ async def export_logs_csv_handler(callback: types.CallbackQuery,
     try:
         # Get all logs (limit to 10000 for performance)
         logs_models = await message_log_dal.get_all_message_logs(
-            session, limit=10000, offset=0)
-        
+            session,
+            limit=10000,
+            offset=0,
+            hide_admin_events=bool(settings.LOG_ADMIN_HIDE),
+        )
+
         if not logs_models:
             await callback.message.answer(_(
                 "admin_logs_csv_no_data"
@@ -355,7 +367,7 @@ async def export_logs_csv_handler(callback: types.CallbackQuery,
         # Create CSV content
         csv_buffer = io.StringIO()
         csv_writer = csv.writer(csv_buffer, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-        
+
         # Write header
         headers = [
             _("admin_csv_header_log_id"),
@@ -364,22 +376,26 @@ async def export_logs_csv_handler(callback: types.CallbackQuery,
             _("admin_csv_header_telegram_username"),
             _("admin_csv_header_telegram_first_name"),
             _("admin_csv_header_event_type"),
-            _("admin_csv_header_content"),
             _("admin_csv_header_is_admin_event"),
             _("admin_csv_header_target_user_id"),
-            _("admin_csv_header_raw_update_preview")
         ]
+        include_sensitive_fields = bool(settings.LOG_EXPORT_INCLUDE_SENSITIVE)
+        if include_sensitive_fields:
+            headers.extend([
+                _("admin_csv_header_content"),
+                _("admin_csv_header_raw_update_preview"),
+            ])
         csv_writer.writerow(headers)
-        
+
         # Write data rows
         for log in logs_models:
             # Format timestamp
             timestamp_str = log.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC') if log.timestamp else ''
-            
+
             # Clean content and raw_update_preview (remove newlines and quotes for CSV)
             content_clean = (log.content or '').replace('\n', ' ').replace('\r', ' ').strip()
             raw_update_clean = (log.raw_update_preview or '').replace('\n', ' ').replace('\r', ' ').strip()
-            
+
             row = [
                 log.log_id or '',
                 timestamp_str,
@@ -387,27 +403,30 @@ async def export_logs_csv_handler(callback: types.CallbackQuery,
                 log.telegram_username or '',
                 log.telegram_first_name or '',
                 log.event_type or '',
-                content_clean,
                 'Yes' if log.is_admin_event else 'No',
                 log.target_user_id or '',
-                raw_update_clean
             ]
+            if include_sensitive_fields:
+                row.extend([
+                    content_clean,
+                    raw_update_clean,
+                ])
             csv_writer.writerow(row)
-        
+
         # Create file
         csv_content = csv_buffer.getvalue()
         csv_buffer.close()
-        
+
         # Generate filename with current timestamp
         now = datetime.now()
         filename = f"message_logs_{now.strftime('%Y%m%d_%H%M%S')}.csv"
-        
+
         # Send as document
         csv_file = types.BufferedInputFile(
             csv_content.encode('utf-8-sig'),  # BOM for Excel compatibility
             filename=filename
         )
-        
+
         await callback.message.answer_document(
             csv_file,
             caption=_(
@@ -416,7 +435,7 @@ async def export_logs_csv_handler(callback: types.CallbackQuery,
                 date=now.strftime('%Y-%m-%d %H:%M:%S')
             )
         )
-        
+
     except Exception as e:
         logging.error(f"Error exporting logs to CSV: {e}", exc_info=True)
         await callback.message.answer(_(

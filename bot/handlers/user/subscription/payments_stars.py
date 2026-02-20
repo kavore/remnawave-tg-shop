@@ -28,15 +28,15 @@ async def pay_stars_callback_handler(
     if not i18n or not callback.message:
         try:
             await callback.answer(get_text("error_occurred_try_again"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_stars.py: %s", exc)
         return
 
     if not settings.STARS_ENABLED:
         try:
             await callback.answer(get_text("payment_service_unavailable_alert"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_stars.py: %s", exc)
         return
 
     try:
@@ -48,8 +48,8 @@ async def pay_stars_callback_handler(
     except (ValueError, IndexError):
         try:
             await callback.answer(get_text("error_try_again"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_stars.py: %s", exc)
         return
 
     user_id = callback.from_user.id
@@ -78,34 +78,44 @@ async def pay_stars_callback_handler(
                     months=int(months),
                     traffic_gb=human_value,
                 ),
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text=get_text("back_to_payment_methods_button"),
-                        callback_data=f"subscribe_period:{human_value}",
-                    )]
-                ]),
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=get_text("back_to_payment_methods_button"),
+                                callback_data=f"subscribe_period:{human_value}",
+                            )
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                text=get_text("cancel_button"),
+                                callback_data="main_action:subscribe",
+                            )
+                        ],
+                    ]
+                ),
             )
         except Exception as e_edit:
             logging.warning(f"Stars payment: failed to show invoice info message ({e_edit})")
         try:
             await callback.answer()
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_stars.py: %s", exc)
         return
 
     try:
         await callback.answer(get_text("error_payment_gateway"), show_alert=True)
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/user/subscription/payments_stars.py: %s", exc)
 
 
 @router.pre_checkout_query()
 async def handle_pre_checkout_query(query: types.PreCheckoutQuery):
     try:
         await query.answer(ok=True)
-    except Exception:
+    except Exception as exc:
         # Nothing else to do here; Telegram will show an error if not answered
-        pass
+        logging.debug("Failed to answer pre_checkout_query in payments_stars: %s", exc)
 
 
 @router.message(F.successful_payment)

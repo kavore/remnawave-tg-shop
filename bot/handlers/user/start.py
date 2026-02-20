@@ -48,13 +48,13 @@ async def send_main_menu(target_event: Union[types.Message,
         if isinstance(target_event, types.CallbackQuery):
             try:
                 await target_event.answer(err_msg_fallback, show_alert=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/start.py: %s", exc)
         elif isinstance(target_event, types.Message):
             try:
                 await target_event.answer(err_msg_fallback)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/start.py: %s", exc)
         return
 
 
@@ -102,8 +102,8 @@ async def send_main_menu(target_event: Union[types.Message,
         if isinstance(target_event, types.CallbackQuery):
             try:
                 await target_event.answer()
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/start.py: %s", exc)
     except Exception as e_send_edit:
         logging.warning(
             f"Failed to send/edit main menu (user: {user_id}, is_edit: {is_edit}): {type(e_send_edit).__name__} - {e_send_edit}."
@@ -119,8 +119,8 @@ async def send_main_menu(target_event: Union[types.Message,
             try:
                 await target_event.answer(
                     _("error_occurred_try_again") if is_edit else None)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/start.py: %s", exc)
 
 
 async def ensure_required_channel_subscription(
@@ -134,8 +134,15 @@ async def ensure_required_channel_subscription(
     Verify that the user is a member of the required channel (if configured).
     Returns True when access can proceed, False when user must subscribe first.
     """
+    if not settings.REQUIRED_CHANNEL_SUBSCRIBE_TO_USE:
+        return True
+
     required_channel_id = settings.REQUIRED_CHANNEL_ID
     if not required_channel_id:
+        logging.warning(
+            "REQUIRED_CHANNEL_SUBSCRIBE_TO_USE is enabled but REQUIRED_CHANNEL_ID is not set. "
+            "Channel gate is skipped."
+        )
         return True
 
     if isinstance(event, types.CallbackQuery):
@@ -213,13 +220,13 @@ async def ensure_required_channel_subscription(
         if isinstance(event, types.CallbackQuery):
             try:
                 await event.answer(error_text, show_alert=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/start.py: %s", exc)
             if message_obj:
                 try:
                     await message_obj.answer(error_text)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug("Suppressed exception in bot/handlers/user/start.py: %s", exc)
         else:
             await event.answer(error_text)
         return False
@@ -234,13 +241,13 @@ async def ensure_required_channel_subscription(
         if isinstance(event, types.CallbackQuery):
             try:
                 await event.answer(error_text, show_alert=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/start.py: %s", exc)
             if message_obj:
                 try:
                     await message_obj.answer(error_text)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug("Suppressed exception in bot/handlers/user/start.py: %s", exc)
         else:
             await event.answer(error_text)
         return False
@@ -289,12 +296,12 @@ async def ensure_required_channel_subscription(
         if keyboard is None and message_obj:
             try:
                 await message_obj.answer(prompt_text)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/start.py: %s", exc)
         try:
             await event.answer(prompt_text, show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/start.py: %s", exc)
     else:
         await event.answer(prompt_text, reply_markup=keyboard)
 
@@ -327,7 +334,7 @@ async def start_command_handler(message: types.Message,
     promo_code_to_apply: Optional[str] = None
     ad_start_param: Optional[str] = None
 
-    if ref_match:
+    if ref_match and settings.REFERRAL_ENABLED:
         raw_ref_value = ref_match.group(1)
         if raw_ref_value.isdigit():
             if settings.LEGACY_REFS:
@@ -345,6 +352,11 @@ async def start_command_handler(message: types.Message,
                     session, normalized_code)
             if ref_user and ref_user.user_id != user_id:
                 referred_by_user_id = ref_user.user_id
+    elif ref_match and not settings.REFERRAL_ENABLED:
+        logging.info(
+            "User %s started with referral parameter while referral system is disabled.",
+            user_id,
+        )
     elif promo_match:
         promo_code_to_apply = promo_match.group(1)
         logging.info(f"User {user_id} started with promo code: {promo_code_to_apply}")
@@ -450,8 +462,8 @@ async def start_command_handler(message: types.Message,
             logging.error(f"Failed to attribute user {user_id} to ad '{ad_start_param}': {e_attr}")
             try:
                 await session.rollback()
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Suppressed exception in bot/handlers/user/start.py: %s", exc)
 
     if not await ensure_required_channel_subscription(message, settings, i18n,
                                                       current_lang, session,
@@ -465,14 +477,13 @@ async def start_command_handler(message: types.Message,
     # Auto-apply promo code if provided via start parameter
     if promo_code_to_apply:
         try:
-            from bot.services.promo_code_service import PromoCodeService
             promo_code_service = PromoCodeService(settings, subscription_service, message.bot, i18n)
 
-            success, result = await promo_code_service.apply_promo_code(
+            success_bonus, bonus_result = await promo_code_service.apply_promo_code(
                 session, user_id, promo_code_to_apply, current_lang
             )
 
-            if success:
+            if success_bonus:
                 await session.commit()
                 logging.info(f"Auto-applied promo code '{promo_code_to_apply}' for user {user_id}")
 
@@ -482,7 +493,7 @@ async def start_command_handler(message: types.Message,
                 connect_button_url = active.get("connect_button_url") if active else None
                 config_link_text = config_link_display or _("config_link_not_available")
 
-                new_end_date = result if isinstance(result, datetime) else None
+                new_end_date = bonus_result if isinstance(bonus_result, datetime) else None
 
                 promo_success_text = _(
                     "promo_code_applied_success_full",
@@ -505,10 +516,49 @@ async def start_command_handler(message: types.Message,
 
                 # Don't show main menu if promo was successfully applied
                 return
-            else:
-                await session.rollback()
-                logging.warning(f"Failed to auto-apply promo code '{promo_code_to_apply}' for user {user_id}: {result}")
-                # Continue to show main menu if promo failed
+
+            success_discount, discount_result = await promo_code_service.apply_discount_promo_code(
+                session, user_id, promo_code_to_apply, current_lang
+            )
+
+            if success_discount:
+                await session.commit()
+                discount_pct = discount_result if isinstance(discount_result, int) else 0
+                logging.info(
+                    f"Auto-applied discount promo code '{promo_code_to_apply}' for user {user_id}: {discount_pct}%"
+                )
+
+                if settings.LOG_PROMO_ACTIVATIONS:
+                    try:
+                        from bot.services.notification_service import NotificationService
+                        notification_service = NotificationService(message.bot, settings, i18n)
+                        await notification_service.notify_discount_promo_activation(
+                            user_id=user_id,
+                            promo_code=promo_code_to_apply.upper(),
+                            discount_percentage=discount_pct,
+                            username=user.username,
+                        )
+                    except Exception as notify_error:
+                        logging.error(f"Failed to send discount promo activation notification: {notify_error}")
+
+                from bot.keyboards.inline.user_keyboards import get_back_to_main_menu_markup
+                await message.answer(
+                    _(
+                        "discount_promo_code_applied_success",
+                        code=hd.quote(promo_code_to_apply.upper()),
+                        discount=discount_pct,
+                    ),
+                    reply_markup=get_back_to_main_menu_markup(current_lang, i18n),
+                    parse_mode="HTML",
+                )
+                return
+
+            await session.rollback()
+            logging.warning(
+                f"Failed to auto-apply promo code '{promo_code_to_apply}' for user {user_id}. "
+                f"Bonus reason: {bonus_result}. Discount reason: {discount_result}"
+            )
+            # Continue to show main menu if promo failed
 
         except Exception as e:
             logging.error(f"Error auto-applying promo code '{promo_code_to_apply}' for user {user_id}: {e}")
@@ -552,7 +602,15 @@ async def verify_channel_subscription_callback(
         welcome_text = _(key="welcome",
                          user_name=hd.quote(callback.from_user.full_name))
         if callback.message:
-            await callback.message.answer(welcome_text)
+            try:
+                await callback.message.edit_text(welcome_text)
+            except Exception as welcome_edit_error:
+                logging.debug(
+                    "Failed to edit subscription prompt to welcome for user %s: %s",
+                    callback.from_user.id,
+                    welcome_edit_error,
+                )
+                await callback.message.answer(welcome_text)
         else:
             fallback_bot: Optional[Bot] = getattr(callback, "bot", None)
             if fallback_bot:
@@ -562,15 +620,22 @@ async def verify_channel_subscription_callback(
     try:
         await callback.answer(_(key="channel_subscription_verified_success"),
                               show_alert=True)
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/user/start.py: %s", exc)
 
-    await send_main_menu(callback,
+    menu_target_event: Union[types.Message, types.CallbackQuery] = callback
+    should_edit_menu_message = bool(callback.message)
+
+    if not settings.DISABLE_WELCOME_MESSAGE and callback.message:
+        menu_target_event = callback.message
+        should_edit_menu_message = False
+
+    await send_main_menu(menu_target_event,
                          settings,
                          i18n_data,
                          subscription_service,
                          session,
-                         is_edit=bool(callback.message))
+                         is_edit=should_edit_menu_message)
 
 
 @router.message(Command("language"))
@@ -663,6 +728,10 @@ async def main_action_callback_handler(
         promo_code_service: PromoCodeService, session: AsyncSession):
     action = callback.data.split(":")[1]
     user_id = callback.from_user.id
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
+    _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs
+                                           ) if i18n else key
 
     from . import subscription as user_subscription_handlers
     from . import referral as user_referral_handlers
@@ -685,6 +754,10 @@ async def main_action_callback_handler(
             callback, i18n_data, settings, panel_service, subscription_service,
             session, bot)
     elif action == "referral":
+        if not settings.REFERRAL_ENABLED:
+            await callback.answer(_("referral_no_bonuses_configured"),
+                                  show_alert=True)
+            return
         await user_referral_handlers.referral_command_handler(
             callback, settings, i18n_data, referral_service, bot, session)
     elif action == "apply_promo":
@@ -711,7 +784,4 @@ async def main_action_callback_handler(
                              session,
                              is_edit=False)
     else:
-        i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
-        _ = lambda key, **kwargs: i18n.gettext(
-            i18n_data.get("current_language"), key, **kw) if i18n else key
         await callback.answer(_("main_menu_unknown_action"), show_alert=True)

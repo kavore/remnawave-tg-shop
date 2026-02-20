@@ -344,12 +344,24 @@ async def delete_user_and_relations(session: AsyncSession, user_id: int) -> bool
             or_(MessageLog.user_id == user_id, MessageLog.target_user_id == user_id)
         )
     )
-    await session.execute(delete(Payment).where(Payment.user_id == user_id))
+
+    user_payment_ids_subquery = select(Payment.payment_id).where(Payment.user_id == user_id)
+
+    # Keep activations of other users intact if they reference this user's payments
     await session.execute(
-        delete(Subscription).where(Subscription.user_id == user_id)
+        update(PromoCodeActivation)
+        .where(
+            PromoCodeActivation.payment_id.in_(user_payment_ids_subquery),
+            PromoCodeActivation.user_id != user_id,
+        )
+        .values(payment_id=None)
     )
     await session.execute(
         delete(PromoCodeActivation).where(PromoCodeActivation.user_id == user_id)
+    )
+    await session.execute(delete(Payment).where(Payment.user_id == user_id))
+    await session.execute(
+        delete(Subscription).where(Subscription.user_id == user_id)
     )
     await session.execute(
         delete(UserPaymentMethod).where(UserPaymentMethod.user_id == user_id)

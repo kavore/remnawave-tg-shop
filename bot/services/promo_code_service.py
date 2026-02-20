@@ -1,13 +1,14 @@
 import logging
-from datetime import datetime, timezone
+import asyncio
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple
 from aiogram import Bot
+from sqlalchemy.orm import sessionmaker
 
 from config.settings import Settings
 
 from db.dal import promo_code_dal, user_dal, active_discount_dal, payment_dal
-from db.models import PromoCode, User
 
 from .subscription_service import SubscriptionService
 from bot.middlewares.i18n import JsonI18n
@@ -23,6 +24,122 @@ class PromoCodeService:
         self.subscription_service = subscription_service
         self.bot = bot
         self.i18n = i18n
+        self.discount_payment_timeout_minutes = max(
+            1,
+            int(getattr(settings, "DISCOUNT_PROMO_PAYMENT_TIMEOUT_MINUTES", 10) or 10),
+        )
+        self._discount_expiration_task: Optional[asyncio.Task] = None
+        self._async_session_factory: Optional[sessionmaker] = None
+
+    async def setup_discount_expiration_worker(
+        self,
+        async_session_factory: sessionmaker,
+    ) -> None:
+        """Attach DB session factory and start background cleanup loop."""
+        self._async_session_factory = async_session_factory
+        if self._discount_expiration_task and not self._discount_expiration_task.done():
+            return
+        self._discount_expiration_task = asyncio.create_task(
+            self._discount_expiration_loop(),
+            name="PromoDiscountExpirationLoop",
+        )
+        logging.info("PromoCodeService: started discount expiration background worker.")
+
+    async def close(self) -> None:
+        """Gracefully stop background workers."""
+        if not self._discount_expiration_task:
+            return
+        self._discount_expiration_task.cancel()
+        try:
+            await self._discount_expiration_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logging.exception("PromoCodeService: failed while stopping expiration worker")
+        finally:
+            self._discount_expiration_task = None
+
+    async def _discount_expiration_loop(self) -> None:
+        """Periodically clears expired discount reservations and notifies users."""
+        while True:
+            try:
+                if not self._async_session_factory:
+                    await asyncio.sleep(30)
+                    continue
+
+                await self._process_expired_discounts_once()
+            except asyncio.CancelledError:
+                logging.info("PromoCodeService: discount expiration loop cancelled.")
+                raise
+            except Exception:
+                logging.exception("PromoCodeService: unhandled error in discount expiration loop")
+
+            await asyncio.sleep(30)
+
+    async def _process_expired_discounts_once(self) -> None:
+        if not self._async_session_factory:
+            return
+
+        now_utc = datetime.now(timezone.utc)
+        notifications_to_send: list[tuple[int, str]] = []
+
+        async with self._async_session_factory() as session:
+            expired_discounts = await active_discount_dal.get_expired_active_discounts(
+                session,
+                now=now_utc,
+                limit=100,
+            )
+            if not expired_discounts:
+                return
+
+            for expired in expired_discounts:
+                cleared = await active_discount_dal.clear_active_discount_if_matches(
+                    session,
+                    user_id=expired.user_id,
+                    promo_code_id=expired.promo_code_id,
+                    expires_at_lte=now_utc,
+                )
+                if not cleared:
+                    continue
+
+                await promo_code_dal.decrement_promo_code_usage(session, expired.promo_code_id)
+
+                db_user = await user_dal.get_user_by_id(session, expired.user_id)
+                user_lang = (
+                    db_user.language_code
+                    if db_user and db_user.language_code
+                    else self.settings.DEFAULT_LANGUAGE
+                )
+                promo = await promo_code_dal.get_promo_code_by_id(session, expired.promo_code_id)
+                promo_code = promo.code if promo else ""
+                message_text = self.i18n.gettext(
+                    user_lang,
+                    "discount_promo_expired_need_reactivate",
+                    code_part=(f" (<code>{promo_code}</code>)" if promo_code else ""),
+                )
+
+                notifications_to_send.append((expired.user_id, message_text))
+
+                logging.info(
+                    "Expired discount reservation removed: user=%s, promo=%s",
+                    expired.user_id,
+                    expired.promo_code_id,
+                )
+
+            await session.commit()
+
+        for user_id, message_text in notifications_to_send:
+            try:
+                await self.bot.send_message(
+                    chat_id=user_id,
+                    text=message_text,
+                    parse_mode="HTML",
+                )
+            except Exception:
+                logging.exception(
+                    "Failed to send discount expiration message to user %s",
+                    user_id,
+                )
 
     async def apply_promo_code(
         self,
@@ -99,7 +216,26 @@ class PromoCodeService:
         code_input_upper = code_input.strip().upper()
 
         # Check if user already has an active discount
-        existing_discount = await active_discount_dal.get_active_discount(session, user_id)
+        existing_discount = await active_discount_dal.get_active_discount(
+            session,
+            user_id,
+            include_expired=True,
+        )
+        if existing_discount:
+            now_utc = datetime.now(timezone.utc)
+            if existing_discount.expires_at <= now_utc:
+                cleared = await active_discount_dal.clear_active_discount_if_expired(
+                    session,
+                    user_id,
+                    now=now_utc,
+                )
+                if cleared:
+                    await promo_code_dal.decrement_promo_code_usage(
+                        session,
+                        existing_discount.promo_code_id,
+                    )
+                existing_discount = None
+
         if existing_discount:
             # Get the promo code for the existing discount
             existing_promo = await promo_code_dal.get_promo_code_by_id(
@@ -128,21 +264,37 @@ class PromoCodeService:
         if existing_activation:
             return False, _("promo_code_already_used_by_user", code=code_input_upper)
 
-        # Set active discount
+        # Reserve discount for limited time and count activation immediately
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            minutes=self.discount_payment_timeout_minutes,
+        )
         active_discount = await active_discount_dal.set_active_discount(
             session,
             user_id=user_id,
             promo_code_id=promo_data.promo_code_id,
-            discount_percentage=promo_data.discount_percentage
+            discount_percentage=promo_data.discount_percentage,
+            expires_at=expires_at,
         )
 
         if not active_discount:
             # This shouldn't happen since we checked above, but just in case
             return False, _("error_applying_promo_discount")
 
+        promo_incremented = await promo_code_dal.increment_promo_code_usage(
+            session,
+            promo_data.promo_code_id,
+        )
+        if not promo_incremented:
+            await active_discount_dal.clear_active_discount_if_matches(
+                session,
+                user_id=user_id,
+                promo_code_id=promo_data.promo_code_id,
+            )
+            return False, _("promo_code_not_found_or_not_discount", code=code_input_upper)
+
         logging.info(
             f"Discount promo code {code_input_upper} activated for user {user_id}: "
-            f"{promo_data.discount_percentage}% off"
+            f"{promo_data.discount_percentage}% off until {expires_at.isoformat()}"
         )
         return True, promo_data.discount_percentage
 
@@ -155,8 +307,26 @@ class PromoCodeService:
         Get user's active discount if any.
         Returns: (discount_percentage, promo_code) or None
         """
-        active_discount = await active_discount_dal.get_active_discount(session, user_id)
+        active_discount = await active_discount_dal.get_active_discount(
+            session,
+            user_id,
+            include_expired=True,
+        )
         if not active_discount:
+            return None
+
+        now_utc = datetime.now(timezone.utc)
+        if active_discount.expires_at <= now_utc:
+            cleared = await active_discount_dal.clear_active_discount_if_expired(
+                session,
+                user_id,
+                now=now_utc,
+            )
+            if cleared:
+                await promo_code_dal.decrement_promo_code_usage(
+                    session,
+                    active_discount.promo_code_id,
+                )
             return None
 
         # Fetch promo code for code string
@@ -175,7 +345,9 @@ class PromoCodeService:
                 f"Promo code {promo.code} expired (valid_until: {promo.valid_until}). "
                 f"Clearing active discount for user {user_id}"
             )
-            await active_discount_dal.clear_active_discount(session, user_id)
+            cleared = await active_discount_dal.clear_active_discount(session, user_id)
+            if cleared:
+                await promo_code_dal.decrement_promo_code_usage(session, promo.promo_code_id)
             return None
 
         return (active_discount.discount_percentage, promo.code)
@@ -206,8 +378,11 @@ class PromoCodeService:
         payment_id: int
     ) -> bool:
         """
-        Consume active discount: link activation to payment, increment usage, clear active discount.
-        Call this AFTER successful payment.
+        Consume discount after successful payment.
+
+        The payment record is the source of truth. Even if the active reservation was
+        concurrently expired/cleared, we still record promo activation and reconcile
+        current_activations so successful discounted payments are always accounted for.
         """
         payment_record = await payment_dal.get_payment_by_db_id(session, payment_id)
         if not payment_record:
@@ -230,18 +405,11 @@ class PromoCodeService:
             )
             return False
 
-        active_discount = await active_discount_dal.get_active_discount(session, user_id)
-        if active_discount and active_discount.promo_code_id != promo_code_id:
-            logging.info(
-                "Active discount promo %s differs from payment promo %s; leaving active discount intact.",
-                active_discount.promo_code_id,
-                promo_code_id,
-            )
-            active_discount = None
-
         existing_activation = await promo_code_dal.get_user_activation_for_promo(
             session, promo_code_id, user_id
         )
+
+        activation_created = False
         if existing_activation:
             if existing_activation.payment_id is None:
                 updated_payment = await promo_code_dal.set_activation_payment_id(
@@ -268,20 +436,43 @@ class PromoCodeService:
                     promo_code_id,
                 )
                 return False
+            activation_created = True
 
-            promo_incremented = await promo_code_dal.increment_promo_code_usage(
-                session, promo_code_id, allow_overflow=True
-            )
-            if not promo_incremented:
-                logging.error(
-                    "Failed to increment discount usage for user %s, promo %s.",
-                    user_id,
-                    promo_code_id,
-                )
-                return False
+        active_discount = await active_discount_dal.get_active_discount(
+            session,
+            user_id,
+            include_expired=True,
+        )
 
+        # Reservation is best-effort cleanup at this point; payment success already happened.
         if active_discount and active_discount.promo_code_id == promo_code_id:
-            await active_discount_dal.clear_active_discount(session, user_id)
+            await active_discount_dal.clear_active_discount_if_matches(
+                session,
+                user_id=user_id,
+                promo_code_id=promo_code_id,
+            )
+        elif active_discount and active_discount.promo_code_id != promo_code_id:
+            logging.info(
+                "Active discount promo %s differs from payment promo %s during consumption.",
+                active_discount.promo_code_id,
+                promo_code_id,
+            )
+        else:
+            logging.info(
+                "Discount reservation already absent at consumption time (user=%s, promo=%s, payment=%s)",
+                user_id,
+                promo_code_id,
+                payment_id,
+            )
+
+        # If reservation was already expired/removed and we had to create activation now,
+        # restore current_activations to match the successful payment.
+        if activation_created:
+            await promo_code_dal.increment_promo_code_usage(
+                session,
+                promo_code_id,
+                allow_overflow=True,
+            )
 
         await session.flush()
         logging.info(

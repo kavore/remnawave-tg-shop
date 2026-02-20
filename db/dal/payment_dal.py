@@ -5,7 +5,7 @@ from sqlalchemy.future import select
 from sqlalchemy import update, func, and_
 from sqlalchemy.orm import selectinload
 
-from db.models import Payment, User
+from db.models import Payment
 
 
 async def create_payment_record(session: AsyncSession,
@@ -176,6 +176,119 @@ async def update_provider_payment_and_status(
     return payment
 
 
+async def mark_provider_payment_succeeded_once(
+        session: AsyncSession,
+        payment_db_id: int,
+        provider_payment_id: str) -> bool:
+    """Atomically mark payment as succeeded only once.
+
+    Returns True only for the first successful transition to "succeeded".
+    Returns False when payment is missing or already succeeded.
+    """
+    stmt = (
+        update(Payment)
+        .where(
+            Payment.payment_id == payment_db_id,
+            Payment.status != "succeeded",
+        )
+        .values(
+            status="succeeded",
+            provider_payment_id=provider_payment_id,
+            updated_at=func.now(),
+        )
+    )
+    result = await session.execute(stmt)
+    updated = (result.rowcount or 0) > 0
+    if updated:
+        logging.info(
+            "Payment record %s atomically marked as succeeded (provider id %s).",
+            payment_db_id,
+            provider_payment_id,
+        )
+    return updated
+
+
+async def mark_provider_payment_processing_once(
+        session: AsyncSession,
+        payment_db_id: int,
+        provider_payment_id: str,
+        expected_status_prefix: Optional[str] = None) -> bool:
+    """Atomically claim payment for processing exactly once.
+
+    Returns True only when status is changed from a non-terminal state to
+    "processing". This prevents duplicate activation when concurrent
+    webhooks arrive for the same payment.
+    """
+    conditions = [
+        Payment.payment_id == payment_db_id,
+        Payment.status != "succeeded",
+        Payment.status != "processing",
+    ]
+    if expected_status_prefix:
+        if expected_status_prefix == "pending":
+            # YooKassa may keep authorized payments in waiting_for_capture
+            # before reporting a final successful capture webhook.
+            conditions.append(
+                Payment.status.in_(("waiting_for_capture", "pending", "pending_yookassa"))
+            )
+        else:
+            conditions.append(Payment.status.like(f"{expected_status_prefix}%"))
+
+    stmt = (
+        update(Payment)
+        .where(*conditions)
+        .values(
+            status="processing",
+            provider_payment_id=provider_payment_id,
+            updated_at=func.now(),
+        )
+    )
+    result = await session.execute(stmt)
+    updated = (result.rowcount or 0) > 0
+    if updated:
+        logging.info(
+            "Payment record %s atomically marked as processing (provider id %s).",
+            payment_db_id,
+            provider_payment_id,
+        )
+    return updated
+
+
+async def rollback_provider_payment_processing(
+        session: AsyncSession,
+        payment_db_id: int,
+        rollback_status: str,
+        provider_payment_id: Optional[str] = None) -> bool:
+    """Atomically rollback temporary processing status.
+
+    Returns True only if payment is currently in "processing" state.
+    """
+    values = {
+        "status": rollback_status,
+        "updated_at": func.now(),
+    }
+    if provider_payment_id:
+        values["provider_payment_id"] = provider_payment_id
+
+    stmt = (
+        update(Payment)
+        .where(
+            Payment.payment_id == payment_db_id,
+            Payment.status == "processing",
+        )
+        .values(**values)
+    )
+    result = await session.execute(stmt)
+    updated = (result.rowcount or 0) > 0
+    if updated:
+        logging.info(
+            "Payment record %s rolled back from processing to %s.",
+            payment_db_id,
+            rollback_status,
+        )
+    return updated
+
+
 async def update_payment_discount_info(
         session: AsyncSession,
         payment_db_id: int,
@@ -205,7 +318,7 @@ async def update_payment_discount_info(
 async def get_financial_statistics(session: AsyncSession) -> Dict[str, Any]:
     """Get comprehensive financial statistics."""
     from datetime import datetime, timedelta
-    from sqlalchemy import and_, text
+    from sqlalchemy import and_
     
     now = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)

@@ -35,8 +35,8 @@ async def request_trial_confirmation_handler(
     if not i18n or not callback.message:
         try:
             await callback.answer(_("error_occurred_try_again"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/trial_handler.py: %s", exc)
         return
 
     show_trial_btn_in_menu_if_fail = False
@@ -53,8 +53,8 @@ async def request_trial_confirmation_handler(
         )
         try:
             await callback.answer()
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/trial_handler.py: %s", exc)
         return
 
     if await subscription_service.has_had_any_subscription(session, user_id):
@@ -66,8 +66,8 @@ async def request_trial_confirmation_handler(
         )
         try:
             await callback.answer()
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/trial_handler.py: %s", exc)
         return
 
     # Directly activate trial without confirmation
@@ -84,8 +84,8 @@ async def request_trial_confirmation_handler(
     if activation_result and activation_result.get("activated"):
         try:
             await callback.answer(_("trial_activated_alert"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/trial_handler.py: %s", exc)
 
         end_date_obj = activation_result.get("end_date")
         config_link_display_for_trial, connect_button_url_for_trial = await prepare_config_links(
@@ -134,8 +134,8 @@ async def request_trial_confirmation_handler(
         final_message_text_in_chat = _(message_key_from_service)
         try:
             await callback.answer(final_message_text_in_chat, show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/trial_handler.py: %s", exc)
         if (
             settings.TRIAL_ENABLED
             and not await subscription_service.has_had_any_subscription(
@@ -197,15 +197,15 @@ async def confirm_activate_trial_handler(
     if not i18n or not callback.message:
         try:
             await callback.answer(_("error_occurred_try_again"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/trial_handler.py: %s", exc)
         return
 
     if not settings.TRIAL_ENABLED:
         try:
             await callback.answer(_("trial_feature_disabled"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/trial_handler.py: %s", exc)
 
         await send_main_menu(
             callback, settings, i18n_data, subscription_service, session, is_edit=True
@@ -216,8 +216,8 @@ async def confirm_activate_trial_handler(
             await callback.answer(
                 _("trial_already_had_subscription_or_trial"), show_alert=True
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/trial_handler.py: %s", exc)
         await send_main_menu(
             callback, settings, i18n_data, subscription_service, session, is_edit=True
         )
@@ -236,8 +236,8 @@ async def confirm_activate_trial_handler(
     if activation_result and activation_result.get("activated"):
         try:
             await callback.answer(_("trial_activated_alert"), show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/trial_handler.py: %s", exc)
 
         end_date_obj = activation_result.get("end_date")
         config_link_display_for_trial, connect_button_url_for_trial = await prepare_config_links(
@@ -274,8 +274,8 @@ async def confirm_activate_trial_handler(
         final_message_text_in_chat = _(message_key_from_service)
         try:
             await callback.answer(final_message_text_in_chat, show_alert=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Suppressed exception in bot/handlers/user/trial_handler.py: %s", exc)
         if (
             settings.TRIAL_ENABLED
             and not await subscription_service.has_had_any_subscription(

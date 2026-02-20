@@ -1,3 +1,4 @@
+import logging
 from aiogram import Bot
 from sqlalchemy.orm import sessionmaker
 
@@ -87,8 +88,8 @@ def build_core_services(
         setattr(subscription_service, "yookassa_service", yookassa_service)
         # Allow panel webhook to trigger renewals through subscription service
         setattr(panel_webhook_service, "subscription_service", subscription_service)
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/app/factories/build_services.py: %s", exc)
 
     return {
         "panel_service": panel_service,

@@ -22,16 +22,23 @@ async def create_message_log(session: AsyncSession,
         return None
 
 
-async def get_all_message_logs(session: AsyncSession, limit: int,
-                               offset: int) -> List[MessageLog]:
-    stmt = select(MessageLog).order_by(
-        MessageLog.timestamp.desc()).limit(limit).offset(offset)
+async def get_all_message_logs(session: AsyncSession,
+                               limit: int,
+                               offset: int,
+                               hide_admin_events: bool = False) -> List[MessageLog]:
+    stmt = select(MessageLog)
+    if hide_admin_events:
+        stmt = stmt.where(MessageLog.is_admin_event.is_(False))
+    stmt = stmt.order_by(MessageLog.timestamp.desc()).limit(limit).offset(offset)
     result = await session.execute(stmt)
     return result.scalars().all()
 
 
-async def count_all_message_logs(session: AsyncSession) -> int:
+async def count_all_message_logs(session: AsyncSession,
+                                  hide_admin_events: bool = False) -> int:
     stmt = select(func.count()).select_from(MessageLog)
+    if hide_admin_events:
+        stmt = stmt.where(MessageLog.is_admin_event.is_(False))
     result = await session.execute(stmt)
     return result.scalar_one()
 

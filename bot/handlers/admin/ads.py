@@ -46,8 +46,8 @@ async def show_ads_menu(callback: types.CallbackQuery, settings: Settings, i18n_
     await callback.message.edit_text(text, reply_markup=reply_markup)
     try:
         await callback.answer()
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/admin/ads.py: %s", exc)
 
 
 @router.callback_query(F.data.startswith("admin_ads:page:"))
@@ -262,8 +262,8 @@ async def ads_create_start(callback: types.CallbackQuery, state: FSMContext, set
     await callback.message.edit_text(_("admin_ads_create_source_prompt"))
     try:
         await callback.answer()
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Suppressed exception in bot/handlers/admin/ads.py: %s", exc)
 
 
 @router.message(
