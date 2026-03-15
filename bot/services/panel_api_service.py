@@ -22,6 +22,11 @@ class PanelApiService:
         self.api_key = settings.PANEL_API_KEY
         self._session: Optional[aiohttp.ClientSession] = None
         self.default_client_ip = "127.0.0.1"
+        self._access_param_name: Optional[str] = None
+        self._access_param_value: Optional[str] = None
+        raw = (settings.PANEL_ACCESS_SECRET or "").strip()
+        if raw and ":" in raw:
+            self._access_param_name, self._access_param_value = raw.split(":", 1)
 
     async def __aenter__(self):
         """Context manager entry"""
@@ -57,6 +62,8 @@ class PanelApiService:
         }
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        if self._access_param_name and self._access_param_value:
+            headers["Cookie"] = f"{self._access_param_name}={self._access_param_value}"
         return headers
 
     @staticmethod
@@ -101,7 +108,12 @@ class PanelApiService:
 
         url_for_request = f"{self.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
 
-        current_params = kwargs.get("params")
+        current_params = dict(kwargs.get("params") or {})
+        if self._access_param_name and self._access_param_value:
+            current_params[self._access_param_name] = self._access_param_value
+        if current_params:
+            kwargs["params"] = current_params
+
         url_with_params_for_log = url_for_request
         if current_params:
             try:
