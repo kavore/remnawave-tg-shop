@@ -29,10 +29,15 @@ jobs:
 
       - name: Run Codex review
         id: run_codex
-        uses: openai/codex-action@v1
+        uses: openai/codex-action@v1.6
         with:
           openai-api-key: ${{ secrets.CODEX_API_KEY }}
           responses-api-endpoint: ${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}
+          model: gpt-5.4
+          effort: xhigh
+          codex-home: ${{ runner.temp }}/codex
+          safety-strategy: unsafe
+          sandbox: danger-full-access
           prompt: |
             This is PR #${{ github.event.pull_request.number }} for ${{ github.repository }}.
 
