@@ -4,6 +4,7 @@ from typing import Dict
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.memory import MemoryStorage
 from sqlalchemy.orm import sessionmaker
 
@@ -19,7 +20,13 @@ from bot.middlewares.channel_subscription import ChannelSubscriptionMiddleware
 def build_dispatcher(settings: Settings, async_session_factory: sessionmaker) -> tuple[Dispatcher, Bot, Dict]:
     storage = MemoryStorage()
     default_props = DefaultBotProperties(parse_mode=ParseMode.HTML)
-    bot = Bot(token=settings.BOT_TOKEN, default=default_props)
+
+    session = None
+    if settings.TELEGRAM_PROXY_URL:
+        session = AiohttpSession(proxy=settings.TELEGRAM_PROXY_URL)
+        logging.info("Telegram Bot API proxy configured: %s", settings.TELEGRAM_PROXY_URL)
+
+    bot = Bot(token=settings.BOT_TOKEN, default=default_props, session=session)
 
     dp = Dispatcher(storage=storage, settings=settings, bot_instance=bot)
 
