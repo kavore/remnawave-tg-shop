@@ -204,6 +204,11 @@ class Settings(BaseSettings):
 
     PANEL_API_URL: Optional[str] = None
     PANEL_API_KEY: Optional[str] = None
+    PANEL_ACCESS_SECRET: Optional[str] = Field(
+        default=None,
+        description="Panel Access Protection (eGames remnawave-reverse-proxy). Format: name:value. "
+        "Added as URL query param and Cookie to every panel API request.",
+    )
     USER_TRAFFIC_LIMIT_GB: Optional[float] = Field(default=0.0)
     USER_TRAFFIC_STRATEGY: str = Field(default="NO_RESET")
     USER_SQUAD_UUIDS: Optional[str] = Field(
@@ -637,6 +642,7 @@ class Settings(BaseSettings):
         'CRYPT4_REDIRECT_URL',
         'TELEGRAM_WEBHOOK_SECRET',
         'PANEL_WEBHOOK_SECRET',
+        'PANEL_ACCESS_SECRET',
         'TELEGRAM_PROXY_URL',
         mode='before',
     )
